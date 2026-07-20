@@ -10,9 +10,11 @@ normal Home Assistant `camera` entity without Android at runtime.
 The recovered stream path:
 
 - provides an interactive Home Assistant login and device picker;
-- signs the Imou media REST request and obtains a short-lived transfer URL;
-- constructs the proprietary TLS/WSSE `PLAY` handshake without a captured
-  request template;
+- opens the camera's authenticated LAN channel over the recovered PTCP/DHHTTP
+  transport, without captured request data;
+- can fall back to a signed Imou media transfer when the local path is
+  unavailable;
+- constructs a fresh proprietary TLS/WSSE `PLAY` handshake for either path;
 - reconstructs RTP/DHAV frames and decrypts encrypted HEVC keyframes;
 - converts HEVC to H.264 HLS and a JPEG snapshot with FFmpeg; and
 - hands the result to Home Assistant's authenticated camera/stream proxy.
@@ -44,15 +46,23 @@ file-free setup.
 ### Network boundary
 
 There is no project-operated backend and no Android relay. Login and device
-discovery contact Imou directly. At runtime, the current transport still asks
-Imou's media service for a temporary transfer address and receives the stream
-through that Imou endpoint. Video decoding, snapshots, HLS generation, and
-Home Assistant delivery all happen locally.
+discovery still contact Imou directly during initial setup and **Reconfigure**.
+At runtime, version 0.3 can receive video directly from the device on the LAN.
+Video decoding, snapshots, HLS generation, and Home Assistant delivery all
+happen locally.
 
-Consequently, version 0.2 is Android-free and keeps credentials inside Home
-Assistant, but it is not yet an offline or LAN-only integration. A native
-local-channel/PTCP transport is being researched separately and should not be
-confused with the working cloud-transfer path.
+The setup form offers three transport modes:
+
+- **Local first, with cloud fallback** (default) tries the LAN transport and
+  requests a temporary Imou transfer only if the local connection fails.
+- **Local only** never calls the Imou media-transfer service at runtime. This
+  mode continues to work without WAN access after a successful setup, provided
+  Home Assistant and the camera remain on the same LAN.
+- **Cloud only** retains the version 0.2 runtime behavior.
+
+Existing version 0.2 entries do not yet contain the additional LAN credentials.
+Use **Reconfigure** once after upgrading to populate them; until then the
+default mode safely uses its cloud fallback.
 
 ## Install with HACS
 
@@ -82,13 +92,15 @@ an `ffmpeg` executable on Home Assistant's `PATH`.
 - Temporary HLS segments and snapshots are deleted when the integration unloads.
 - No Android process, Supervisor add-on, open add-on port, Generic Camera entry,
   RTSP server, or ONVIF profile is required at runtime.
+- In **Local only** mode, opening and reconnecting the stream performs no Imou
+  cloud media request.
 
 ## Compatibility
 
 - Home Assistant 2025.3 or newer
 - HACS integration repository layout
 - FFmpeg with `libx264`
-- Currently tested: Imou Doorbell 3 stream at 1920×1920, transcoded to a
+- Currently tested: Imou Doorbell 3 HEVC stream at 2304×1296, transcoded to a
   configurable H.264 width (960 pixels by default)
 
 Home Assistant 2026.3 and newer load the bundled integration icon locally.

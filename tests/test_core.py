@@ -17,6 +17,28 @@ _SPEC.loader.exec_module(_CORE)
 
 
 class CoreTests(unittest.TestCase):
+    def test_extractor_accepts_local_four_byte_interleaved_lengths(self) -> None:
+        payload = b"\x00\x00\x00\x01\x40\x01synthetic-hevc"
+        frame_length = 24 + len(payload) + 8
+        header = bytearray(24)
+        header[:4] = b"DHAV"
+        header[4] = 0xFD
+        header[12:16] = frame_length.to_bytes(4, "little")
+        frame = (
+            bytes(header)
+            + payload
+            + b"dhav"
+            + frame_length.to_bytes(4, "little")
+        )
+        packet = b"$\x02" + len(frame).to_bytes(4, "big") + frame
+        extractor = _CORE.HevcExtractor(bytes(32))
+
+        output = []
+        for offset in range(0, len(packet), 7):
+            output.extend(extractor.feed(packet[offset : offset + 7]))
+
+        self.assertEqual(output, [payload])
+
     def test_play_response_accepts_both_length_headers(self) -> None:
         self.assertEqual(
             _CORE._play_response_length(b"HTTP/1.1 200 OK\r\nPrivate-Length: 717"),

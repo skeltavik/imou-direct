@@ -20,9 +20,10 @@
           "country": "Account country code",
           "name": "Camera name",
           "password": "Imou password",
+          "transport_mode": "Stream transport",
           "width": "Stream width"
         },
-        "description": "Sign in once to discover your camera. Your Imou account password is used only during this step and is not stored. The resulting device credentials remain inside Home Assistant.",
+        "description": "Sign in once to discover your camera and choose local or cloud streaming. Your Imou account password is used only during this step and is not stored. The resulting device credentials remain inside Home Assistant.",
         "title": "Set up Imou Direct"
       },
       "device": {
@@ -38,10 +39,20 @@
           "country": "Account country code",
           "name": "Camera name",
           "password": "Imou password",
+          "transport_mode": "Stream transport",
           "width": "Stream width"
         },
-        "description": "Sign in again to refresh this camera's private session. Your Imou account and password are not stored.",
+        "description": "Sign in again to refresh this camera's private session and transport mode. Your Imou account and password are not stored.",
         "title": "Refresh Imou Direct"
+      }
+    }
+  },
+  "selector": {
+    "transport_mode": {
+      "options": {
+        "cloud_only": "Cloud only",
+        "local_first": "Local first, with cloud fallback",
+        "local_only": "Local only"
       }
     }
   }

@@ -27,14 +27,17 @@ from .const import (
     CONF_COUNTRY,
     CONF_DEVICE_ID,
     CONF_FFMPEG_BIN,
+    CONF_TRANSPORT_MODE,
     CONF_WIDTH,
     DEFAULT_COUNTRY,
     DEFAULT_FFMPEG_BIN,
     DEFAULT_NAME,
+    DEFAULT_TRANSPORT_MODE,
     DEFAULT_WIDTH,
     DOMAIN,
     MAX_WIDTH,
     MIN_WIDTH,
+    TRANSPORT_MODES,
 )
 from .manager import validate_bootstrap
 
@@ -50,9 +53,12 @@ def _discover_devices(
     client = ImouCloudClient(country=country)
     session = client.login(account, password)
     supported: list[tuple[ImouDevice, dict[str, Any]]] = []
-    for device in client.list_devices(session):
+    devices = client.list_devices(session)
+    for device in devices:
         try:
-            bootstrap = validate_bootstrap(bootstrap_from_device(session, device))
+            bootstrap = validate_bootstrap(
+                bootstrap_from_device(session, device, devices)
+            )
         except ImouProtocolError:
             continue
         supported.append((device, bootstrap))
@@ -124,6 +130,7 @@ class ImouDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     self._settings = {
                         CONF_NAME: user_input[CONF_NAME],
                         CONF_COUNTRY: country,
+                        CONF_TRANSPORT_MODE: user_input[CONF_TRANSPORT_MODE],
                         CONF_WIDTH: user_input[CONF_WIDTH],
                     }
                     self._devices = {
@@ -145,6 +152,15 @@ class ImouDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ),
                 vol.Required(CONF_COUNTRY, default=DEFAULT_COUNTRY): selector.TextSelector(
                     selector.TextSelectorConfig()
+                ),
+                vol.Required(
+                    CONF_TRANSPORT_MODE, default=DEFAULT_TRANSPORT_MODE
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=list(TRANSPORT_MODES),
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                        translation_key="transport_mode",
+                    )
                 ),
                 vol.Required(CONF_WIDTH, default=DEFAULT_WIDTH): vol.All(
                     vol.Coerce(int), vol.Range(min=MIN_WIDTH, max=MAX_WIDTH)
@@ -239,6 +255,7 @@ class ImouDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     data = {
                         CONF_NAME: user_input[CONF_NAME],
                         CONF_COUNTRY: country,
+                        CONF_TRANSPORT_MODE: user_input[CONF_TRANSPORT_MODE],
                         CONF_WIDTH: user_input[CONF_WIDTH],
                         CONF_BOOTSTRAP: bootstrap,
                     }
@@ -265,6 +282,18 @@ class ImouDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(
                     CONF_COUNTRY, default=entry.data.get(CONF_COUNTRY, DEFAULT_COUNTRY)
                 ): selector.TextSelector(selector.TextSelectorConfig()),
+                vol.Required(
+                    CONF_TRANSPORT_MODE,
+                    default=entry.data.get(
+                        CONF_TRANSPORT_MODE, DEFAULT_TRANSPORT_MODE
+                    ),
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=list(TRANSPORT_MODES),
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                        translation_key="transport_mode",
+                    )
+                ),
                 vol.Required(
                     CONF_WIDTH, default=entry.data.get(CONF_WIDTH, DEFAULT_WIDTH)
                 ): vol.All(

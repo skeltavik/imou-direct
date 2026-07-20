@@ -20,9 +20,10 @@
           "country": "Landcode van het account",
           "name": "Cameranaam",
           "password": "Imou-wachtwoord",
+          "transport_mode": "Streamtransport",
           "width": "Streambreedte"
         },
-        "description": "Meld je één keer aan om je camera te vinden. Je Imou-wachtwoord wordt alleen tijdens deze stap gebruikt en niet opgeslagen. De resulterende toestelgegevens blijven binnen Home Assistant.",
+        "description": "Meld je één keer aan om je camera te vinden en kies lokale of cloudstreaming. Je Imou-wachtwoord wordt alleen tijdens deze stap gebruikt en niet opgeslagen. De resulterende toestelgegevens blijven binnen Home Assistant.",
         "title": "Imou Direct instellen"
       },
       "device": {
@@ -38,10 +39,20 @@
           "country": "Landcode van het account",
           "name": "Cameranaam",
           "password": "Imou-wachtwoord",
+          "transport_mode": "Streamtransport",
           "width": "Streambreedte"
         },
-        "description": "Meld je opnieuw aan om de privésessie van deze camera te vernieuwen. Je Imou-account en wachtwoord worden niet opgeslagen.",
+        "description": "Meld je opnieuw aan om de privésessie en transportmodus van deze camera te vernieuwen. Je Imou-account en wachtwoord worden niet opgeslagen.",
         "title": "Imou Direct vernieuwen"
+      }
+    }
+  },
+  "selector": {
+    "transport_mode": {
+      "options": {
+        "cloud_only": "Alleen cloud",
+        "local_first": "Eerst lokaal, met cloudfallback",
+        "local_only": "Alleen lokaal"
       }
     }
   }
