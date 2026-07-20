@@ -8,6 +8,7 @@ __pycache__/
 /vendor/
 /imou_direct/
 /tools/
+/tmp/
 /FINDINGS.md
 /REVERSE_ENGINEERING.md
 /*_probe.py

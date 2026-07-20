@@ -1,5 +1,9 @@
 # Imou Direct
 
+<p align="center">
+  <img src="custom_components/imou_direct/brand/icon@2x.png" alt="Imou Direct icon" width="160">
+</p>
+
 Experimental HACS custom integration that exposes an Imou Doorbell 3 as a
 normal Home Assistant `camera` entity without Android at runtime.
 
@@ -68,3 +72,8 @@ form.
 - FFmpeg with `libx264`
 - Currently tested: Imou Doorbell 3 stream at 1920×1920, transcoded to a
   configurable H.264 width (960 pixels by default)
+
+Home Assistant 2026.3 and newer load the bundled integration icon locally.
+Imou is a trademark of its respective owner. Imou Direct is an independent,
+unofficial interoperability project and is not affiliated with or endorsed by
+Imou.
