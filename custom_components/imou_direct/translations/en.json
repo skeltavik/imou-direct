@@ -8,6 +8,7 @@
       "cannot_connect": "Unable to connect to Imou.",
       "device_not_found": "The configured camera was not found in this account.",
       "ffmpeg_missing": "The configured FFmpeg executable was not found.",
+      "invalid_country": "Enter a valid two-letter account country code.",
       "invalid_auth": "The Imou account or password is incorrect.",
       "no_supported_devices": "No supported camera was found in this Imou account.",
       "unknown": "Imou returned an unexpected response. Try again later."

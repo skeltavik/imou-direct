@@ -8,6 +8,7 @@
       "cannot_connect": "Kan geen verbinding maken met Imou.",
       "device_not_found": "De ingestelde camera is niet gevonden in dit account.",
       "ffmpeg_missing": "Het ingestelde FFmpeg-programma werd niet gevonden.",
+      "invalid_country": "Voer een geldige landcode van twee letters in.",
       "invalid_auth": "Het Imou-account of wachtwoord is onjuist.",
       "no_supported_devices": "Er is geen ondersteunde camera gevonden in dit Imou-account.",
       "unknown": "Imou gaf een onverwacht antwoord. Probeer het later opnieuw."

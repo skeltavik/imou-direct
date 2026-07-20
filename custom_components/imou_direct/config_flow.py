@@ -97,6 +97,7 @@ class ImouDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             try:
+                country = _country(user_input[CONF_COUNTRY])
                 await self.hass.async_add_executor_job(
                     _validate_ffmpeg, user_input[CONF_FFMPEG_BIN]
                 )
@@ -104,8 +105,10 @@ class ImouDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     _discover_devices,
                     user_input[CONF_ACCOUNT],
                     user_input[CONF_PASSWORD],
-                    user_input[CONF_COUNTRY],
+                    country,
                 )
+            except vol.Invalid:
+                errors[CONF_COUNTRY] = "invalid_country"
             except FfmpegNotFoundError:
                 errors["base"] = "ffmpeg_missing"
             except ImouInvalidAuth:
@@ -120,7 +123,7 @@ class ImouDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 else:
                     self._settings = {
                         CONF_NAME: user_input[CONF_NAME],
-                        CONF_COUNTRY: user_input[CONF_COUNTRY],
+                        CONF_COUNTRY: country,
                         CONF_FFMPEG_BIN: user_input[CONF_FFMPEG_BIN],
                         CONF_WIDTH: user_input[CONF_WIDTH],
                     }
@@ -141,7 +144,9 @@ class ImouDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_PASSWORD): selector.TextSelector(
                     selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
                 ),
-                vol.Required(CONF_COUNTRY, default=DEFAULT_COUNTRY): _country,
+                vol.Required(CONF_COUNTRY, default=DEFAULT_COUNTRY): selector.TextSelector(
+                    selector.TextSelectorConfig()
+                ),
                 vol.Required(CONF_FFMPEG_BIN, default=DEFAULT_FFMPEG_BIN): str,
                 vol.Required(CONF_WIDTH, default=DEFAULT_WIDTH): vol.All(
                     vol.Coerce(int), vol.Range(min=MIN_WIDTH, max=MAX_WIDTH)
@@ -194,6 +199,7 @@ class ImouDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             try:
+                country = _country(user_input[CONF_COUNTRY])
                 await self.hass.async_add_executor_job(
                     _validate_ffmpeg, user_input[CONF_FFMPEG_BIN]
                 )
@@ -201,8 +207,10 @@ class ImouDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     _discover_devices,
                     user_input[CONF_ACCOUNT],
                     user_input[CONF_PASSWORD],
-                    user_input[CONF_COUNTRY],
+                    country,
                 )
+            except vol.Invalid:
+                errors[CONF_COUNTRY] = "invalid_country"
             except FfmpegNotFoundError:
                 errors["base"] = "ffmpeg_missing"
             except ImouInvalidAuth:
@@ -231,7 +239,7 @@ class ImouDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     device, bootstrap = selected
                     data = {
                         CONF_NAME: user_input[CONF_NAME],
-                        CONF_COUNTRY: user_input[CONF_COUNTRY],
+                        CONF_COUNTRY: country,
                         CONF_FFMPEG_BIN: user_input[CONF_FFMPEG_BIN],
                         CONF_WIDTH: user_input[CONF_WIDTH],
                         CONF_BOOTSTRAP: bootstrap,
@@ -256,7 +264,7 @@ class ImouDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ),
                 vol.Required(
                     CONF_COUNTRY, default=entry.data.get(CONF_COUNTRY, DEFAULT_COUNTRY)
-                ): _country,
+                ): selector.TextSelector(selector.TextSelectorConfig()),
                 vol.Required(
                     CONF_FFMPEG_BIN,
                     default=entry.data.get(CONF_FFMPEG_BIN, DEFAULT_FFMPEG_BIN),
