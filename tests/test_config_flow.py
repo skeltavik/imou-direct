@@ -29,6 +29,9 @@ class _ConfigFlow:
     def __init_subclass__(cls, **_kwargs) -> None:
         super().__init_subclass__()
 
+    def __init__(self) -> None:
+        self.base_initialized = True
+
     async def async_set_unique_id(self, value: str) -> None:
         self.unique_id = value
 
@@ -125,6 +128,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         _FLOW._validate_ffmpeg = lambda _value: None
         try:
             flow = _FLOW.ImouDirectConfigFlow()
+            self.assertTrue(flow.base_initialized)
             flow.hass = _Hass()
             result = await flow.async_step_user(
                 {

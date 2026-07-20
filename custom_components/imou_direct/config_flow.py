@@ -77,6 +77,7 @@ class ImouDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     def __init__(self) -> None:
+        super().__init__()
         self._devices: dict[str, tuple[ImouDevice, dict[str, Any]]] = {}
         self._settings: dict[str, Any] = {}
 
