@@ -1,0 +1,24 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "Dit configuratiebestand is al ingesteld."
+    },
+    "error": {
+      "cannot_read": "Het configuratiebestand kan niet worden gelezen.",
+      "ffmpeg_missing": "Het ingestelde FFmpeg-programma werd niet gevonden.",
+      "invalid_config": "Het configuratiebestand is geen geldig Imou Direct-bootstrapbestand."
+    },
+    "step": {
+      "user": {
+        "data": {
+          "config_path": "Privé-bootstrapbestand",
+          "ffmpeg_bin": "FFmpeg-programma",
+          "name": "Cameranaam",
+          "width": "Streambreedte"
+        },
+        "description": "Selecteer de privé-bootstrap-JSON uit de reverse-engineeringtools. Houd dit bestand geheim.",
+        "title": "Imou Direct instellen"
+      }
+    }
+  }
+}

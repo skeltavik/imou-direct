@@ -1,0 +1,24 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "This configuration file is already configured."
+    },
+    "error": {
+      "cannot_read": "The configuration file cannot be read.",
+      "ffmpeg_missing": "The configured FFmpeg executable was not found.",
+      "invalid_config": "The configuration file is not a valid Imou Direct bootstrap file."
+    },
+    "step": {
+      "user": {
+        "data": {
+          "config_path": "Private bootstrap file",
+          "ffmpeg_bin": "FFmpeg executable",
+          "name": "Camera name",
+          "width": "Stream width"
+        },
+        "description": "Select the private bootstrap JSON exported by the reverse-engineering tools. Keep this file private.",
+        "title": "Set up Imou Direct"
+      }
+    }
+  }
+}
