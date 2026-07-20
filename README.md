@@ -67,9 +67,9 @@ confused with the working cloud-transfer path.
 For manual installation, copy `custom_components/imou_direct` into
 `/config/custom_components/imou_direct` and restart Home Assistant.
 
-Home Assistant OS and Home Assistant Container include FFmpeg. Other install
-types must provide an FFmpeg executable; its path can be changed in the setup
-form.
+Home Assistant OS and Home Assistant Container already include FFmpeg, so no
+separate add-on or setup field is needed. Other installation types must provide
+an `ffmpeg` executable on Home Assistant's `PATH`.
 
 ## Security and runtime behavior
 

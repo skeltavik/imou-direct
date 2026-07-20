@@ -99,7 +99,7 @@ class ImouDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             try:
                 country = _country(user_input[CONF_COUNTRY])
                 await self.hass.async_add_executor_job(
-                    _validate_ffmpeg, user_input[CONF_FFMPEG_BIN]
+                    _validate_ffmpeg, DEFAULT_FFMPEG_BIN
                 )
                 devices = await self.hass.async_add_executor_job(
                     _discover_devices,
@@ -124,7 +124,6 @@ class ImouDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     self._settings = {
                         CONF_NAME: user_input[CONF_NAME],
                         CONF_COUNTRY: country,
-                        CONF_FFMPEG_BIN: user_input[CONF_FFMPEG_BIN],
                         CONF_WIDTH: user_input[CONF_WIDTH],
                     }
                     self._devices = {
@@ -147,7 +146,6 @@ class ImouDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_COUNTRY, default=DEFAULT_COUNTRY): selector.TextSelector(
                     selector.TextSelectorConfig()
                 ),
-                vol.Required(CONF_FFMPEG_BIN, default=DEFAULT_FFMPEG_BIN): str,
                 vol.Required(CONF_WIDTH, default=DEFAULT_WIDTH): vol.All(
                     vol.Coerce(int), vol.Range(min=MIN_WIDTH, max=MAX_WIDTH)
                 ),
@@ -196,12 +194,13 @@ class ImouDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Refresh the private device session without storing account credentials."""
         entry = self._get_reconfigure_entry()
+        ffmpeg_bin = entry.data.get(CONF_FFMPEG_BIN, DEFAULT_FFMPEG_BIN)
         errors: dict[str, str] = {}
         if user_input is not None:
             try:
                 country = _country(user_input[CONF_COUNTRY])
                 await self.hass.async_add_executor_job(
-                    _validate_ffmpeg, user_input[CONF_FFMPEG_BIN]
+                    _validate_ffmpeg, ffmpeg_bin
                 )
                 devices = await self.hass.async_add_executor_job(
                     _discover_devices,
@@ -240,10 +239,11 @@ class ImouDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     data = {
                         CONF_NAME: user_input[CONF_NAME],
                         CONF_COUNTRY: country,
-                        CONF_FFMPEG_BIN: user_input[CONF_FFMPEG_BIN],
                         CONF_WIDTH: user_input[CONF_WIDTH],
                         CONF_BOOTSTRAP: bootstrap,
                     }
+                    if CONF_FFMPEG_BIN in entry.data:
+                        data[CONF_FFMPEG_BIN] = ffmpeg_bin
                     return self.async_update_reload_and_abort(
                         entry,
                         unique_id=device.device_id,
@@ -265,10 +265,6 @@ class ImouDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(
                     CONF_COUNTRY, default=entry.data.get(CONF_COUNTRY, DEFAULT_COUNTRY)
                 ): selector.TextSelector(selector.TextSelectorConfig()),
-                vol.Required(
-                    CONF_FFMPEG_BIN,
-                    default=entry.data.get(CONF_FFMPEG_BIN, DEFAULT_FFMPEG_BIN),
-                ): str,
                 vol.Required(
                     CONF_WIDTH, default=entry.data.get(CONF_WIDTH, DEFAULT_WIDTH)
                 ): vol.All(

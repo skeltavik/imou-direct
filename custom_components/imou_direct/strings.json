@@ -18,7 +18,6 @@
         "data": {
           "account": "Imou account",
           "country": "Account country code",
-          "ffmpeg_bin": "FFmpeg executable",
           "name": "Camera name",
           "password": "Imou password",
           "width": "Stream width"
@@ -37,7 +36,6 @@
         "data": {
           "account": "Imou account",
           "country": "Account country code",
-          "ffmpeg_bin": "FFmpeg executable",
           "name": "Camera name",
           "password": "Imou password",
           "width": "Stream width"

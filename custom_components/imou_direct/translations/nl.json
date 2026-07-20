@@ -18,7 +18,6 @@
         "data": {
           "account": "Imou-account",
           "country": "Landcode van het account",
-          "ffmpeg_bin": "FFmpeg-programma",
           "name": "Cameranaam",
           "password": "Imou-wachtwoord",
           "width": "Streambreedte"
@@ -37,7 +36,6 @@
         "data": {
           "account": "Imou-account",
           "country": "Landcode van het account",
-          "ffmpeg_bin": "FFmpeg-programma",
           "name": "Cameranaam",
           "password": "Imou-wachtwoord",
           "width": "Streambreedte"

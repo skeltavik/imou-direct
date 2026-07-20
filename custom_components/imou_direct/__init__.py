@@ -11,6 +11,7 @@ from .const import (
     CONF_CONFIG_PATH,
     CONF_FFMPEG_BIN,
     CONF_WIDTH,
+    DEFAULT_FFMPEG_BIN,
     PLATFORMS,
 )
 from .manager import DirectStreamManager, validate_bootstrap, validate_bootstrap_file
@@ -31,7 +32,9 @@ async def async_setup_entry(
                 validate_bootstrap_file, entry.data[CONF_CONFIG_PATH]
             )
         config.setdefault("output", {})["width"] = entry.data[CONF_WIDTH]
-        manager = DirectStreamManager(config, entry.data[CONF_FFMPEG_BIN])
+        manager = DirectStreamManager(
+            config, entry.data.get(CONF_FFMPEG_BIN, DEFAULT_FFMPEG_BIN)
+        )
         await hass.async_add_executor_job(manager.start)
     except (OSError, ValueError, KeyError) as error:
         if manager is not None:

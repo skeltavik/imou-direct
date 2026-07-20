@@ -44,6 +44,12 @@ class _ConfigFlow:
     def async_show_form(self, **kwargs) -> dict:
         return {"type": "form", **kwargs}
 
+    def _get_reconfigure_entry(self):
+        return self.reconfigure_entry
+
+    def async_update_reload_and_abort(self, entry, **kwargs) -> dict:
+        return {"type": "abort", "entry": entry, **kwargs}
+
 
 class _Hass:
     async def async_add_executor_job(self, function, *args):
@@ -118,6 +124,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         }
         self.assertIsInstance(validators["country"], _Selector)
         self.assertIsNot(validators["country"], _FLOW._country)
+        self.assertNotIn("ffmpeg_bin", validators)
 
     async def test_invalid_country_is_reported_on_the_field(self) -> None:
         flow = _FLOW.ImouDirectConfigFlow()
@@ -129,13 +136,69 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "account": "owner@example.test",
                 "password": "account-password",
                 "country": "Belgium",
-                "ffmpeg_bin": "ffmpeg",
                 "width": 960,
             }
         )
 
         self.assertEqual(result["type"], "form")
         self.assertEqual(result["errors"], {"country": "invalid_country"})
+
+    async def test_reconfigure_hides_but_preserves_legacy_ffmpeg_path(self) -> None:
+        bootstrap = {
+            "rest": {"host": "https://entry.example"},
+            "request": {"deviceId": "DEVICE123"},
+            "stream": {"password": "device-password"},
+        }
+        device = _CLOUD.ImouDevice(
+            device_id="DEVICE123",
+            product_id="PRODUCT",
+            name="Doorbell",
+            catalog="Doorbell",
+            status="online",
+            raw={},
+        )
+        flow = _FLOW.ImouDirectConfigFlow()
+        flow.hass = _Hass()
+        flow.reconfigure_entry = types.SimpleNamespace(
+            data={
+                "name": "Front door",
+                "country": "BE",
+                "ffmpeg_bin": "/legacy/ffmpeg",
+                "width": 960,
+                "bootstrap": bootstrap,
+            },
+            title="Front door",
+            unique_id="DEVICE123",
+        )
+
+        form = await flow.async_step_reconfigure()
+        validators = {
+            key.schema: value for key, value in form["data_schema"].schema.items()
+        }
+        self.assertNotIn("ffmpeg_bin", validators)
+
+        validated_ffmpeg = []
+        old_discover = _FLOW._discover_devices
+        old_ffmpeg = _FLOW._validate_ffmpeg
+        _FLOW._discover_devices = lambda *_args: [(device, bootstrap)]
+        _FLOW._validate_ffmpeg = validated_ffmpeg.append
+        try:
+            result = await flow.async_step_reconfigure(
+                {
+                    "name": "Front door",
+                    "account": "owner@example.test",
+                    "password": "account-password",
+                    "country": "BE",
+                    "width": 960,
+                }
+            )
+        finally:
+            _FLOW._discover_devices = old_discover
+            _FLOW._validate_ffmpeg = old_ffmpeg
+
+        self.assertEqual(result["type"], "abort")
+        self.assertEqual(result["data"]["ffmpeg_bin"], "/legacy/ffmpeg")
+        self.assertEqual(validated_ffmpeg, ["/legacy/ffmpeg"])
 
     async def test_account_password_is_not_stored(self) -> None:
         bootstrap = {
@@ -154,13 +217,14 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         old_discover = _FLOW._discover_devices
         old_ffmpeg = _FLOW._validate_ffmpeg
         discovered_with = []
+        validated_ffmpeg = []
 
         def discover(*args):
             discovered_with.append(args)
             return [(device, bootstrap)]
 
         _FLOW._discover_devices = discover
-        _FLOW._validate_ffmpeg = lambda _value: None
+        _FLOW._validate_ffmpeg = validated_ffmpeg.append
         try:
             flow = _FLOW.ImouDirectConfigFlow()
             self.assertTrue(flow.base_initialized)
@@ -171,7 +235,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                     "account": "owner@example.test",
                     "password": "account-password",
                     "country": " be ",
-                    "ffmpeg_bin": "ffmpeg",
                     "width": 960,
                 }
             )
@@ -187,7 +250,9 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("account-password", serialized)
         self.assertEqual(result["data"]["bootstrap"], bootstrap)
         self.assertEqual(result["data"]["country"], "BE")
+        self.assertNotIn("ffmpeg_bin", result["data"])
         self.assertEqual(discovered_with[0][2], "BE")
+        self.assertEqual(validated_ffmpeg, ["ffmpeg"])
 
 
 if __name__ == "__main__":
