@@ -7,38 +7,52 @@
 Experimental HACS custom integration that exposes an Imou Doorbell 3 as a
 normal Home Assistant `camera` entity without Android at runtime.
 
-The recovered stream path directly:
+The recovered stream path:
 
+- provides an interactive Home Assistant login and device picker;
 - signs the Imou media REST request and obtains a short-lived transfer URL;
-- performs the proprietary TLS/WSSE `PLAY` handshake;
+- constructs the proprietary TLS/WSSE `PLAY` handshake without a captured
+  request template;
 - reconstructs RTP/DHAV frames and decrypts encrypted HEVC keyframes;
 - converts HEVC to H.264 HLS and a JPEG snapshot with FFmpeg; and
 - hands the result to Home Assistant's authenticated camera/stream proxy.
 
 This is a research prototype for hardware and accounts you own or are
 authorized to test. It is currently validated with an Imou Doorbell 3 plus
-Chime and is not a general replacement for the Imou Life account login flow.
+Chime.
 
-## Prerequisite: private bootstrap file
+## Account setup and private data
 
-The integration needs a private bootstrap JSON recovered from your own
-authenticated Imou Life session. That file is intentionally not part of this
-repository. It contains account and device credentials and must never be
-committed, published, pasted into an issue, or stored in an untrusted backup.
+Setup asks for the Imou account, password, two-letter account country, camera
+name, and output width in the normal Home Assistant interface. If the account
+contains multiple supported cameras, a second screen asks which one to add.
 
-Place it on the Home Assistant host as:
+The account identifier and account password are used only for that login and
+are not stored. Home Assistant stores the resulting Imou session token and
+device stream credentials locally in its config-entry storage so it can
+reconnect after a restart. Treat the Home Assistant configuration directory
+and backups as sensitive. These values are excluded from diagnostics and logs.
 
-```text
-/config/imou_direct.json
-```
+Use **Reconfigure** on the integration if the private Imou session expires or
+you want to refresh its device credentials. This asks for the account login
+again and replaces the old session without storing the account password.
 
-Restrict the file to the Home Assistant user where the installation permits
-that. The integration reads it from disk and does not copy its contents into
-the config-entry database, diagnostics, entity attributes, or logs.
+Existing version 0.1 installations that use `/config/imou_direct.json` remain
+compatible. Reconfiguring such an entry migrates it to the interactive,
+file-free setup.
 
-The current bootstrap originates from an authenticated app session. Its full
-lifetime is not yet known, so a future account-session expiry may require a
-fresh export.
+### Network boundary
+
+There is no project-operated backend and no Android relay. Login and device
+discovery contact Imou directly. At runtime, the current transport still asks
+Imou's media service for a temporary transfer address and receives the stream
+through that Imou endpoint. Video decoding, snapshots, HLS generation, and
+Home Assistant delivery all happen locally.
+
+Consequently, version 0.2 is Android-free and keeps credentials inside Home
+Assistant, but it is not yet an offline or LAN-only integration. A native
+local-channel/PTCP transport is being researched separately and should not be
+confused with the working cloud-transfer path.
 
 ## Install with HACS
 
@@ -47,7 +61,8 @@ fresh export.
    **Integration**.
 3. Install **Imou Direct** and restart Home Assistant.
 4. Open **Settings → Devices & services → Add integration**.
-5. Select **Imou Direct** and keep the default private path above.
+5. Select **Imou Direct**, enter the Imou login in Home Assistant, and select
+   the camera when prompted.
 
 For manual installation, copy `custom_components/imou_direct` into
 `/config/custom_components/imou_direct` and restart Home Assistant.
@@ -59,6 +74,9 @@ form.
 ## Security and runtime behavior
 
 - The generated HLS service binds only to `127.0.0.1` inside Home Assistant.
+- The Imou account identifier and password are never retained after setup.
+- Session and device credentials remain in Home Assistant's local config-entry
+  storage and never appear in diagnostics or entity attributes.
 - Browser clients use Home Assistant's authenticated camera proxy.
 - Diagnostics contain only connection state, frame age, and reconnect count.
 - Temporary HLS segments and snapshots are deleted when the integration unloads.

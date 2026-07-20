@@ -1,23 +1,48 @@
 {
   "config": {
     "abort": {
-      "already_configured": "This configuration file is already configured."
+      "already_configured": "This Imou device is already configured.",
+      "discovery_expired": "The device discovery expired. Start setup again."
     },
     "error": {
-      "cannot_read": "The configuration file cannot be read.",
+      "cannot_connect": "Unable to connect to Imou.",
+      "device_not_found": "The configured camera was not found in this account.",
       "ffmpeg_missing": "The configured FFmpeg executable was not found.",
-      "invalid_config": "The configuration file is not a valid Imou Direct bootstrap file."
+      "invalid_auth": "The Imou account or password is incorrect.",
+      "no_supported_devices": "No supported camera was found in this Imou account.",
+      "unknown": "Imou returned an unexpected response. Try again later."
     },
     "step": {
       "user": {
         "data": {
-          "config_path": "Private bootstrap file",
+          "account": "Imou account",
+          "country": "Account country code",
           "ffmpeg_bin": "FFmpeg executable",
           "name": "Camera name",
+          "password": "Imou password",
           "width": "Stream width"
         },
-        "description": "Select the private bootstrap JSON exported by the reverse-engineering tools. Keep this file private.",
+        "description": "Sign in once to discover your camera. Your Imou account password is used only during this step and is not stored. The resulting device credentials remain inside Home Assistant.",
         "title": "Set up Imou Direct"
+      },
+      "device": {
+        "data": {
+          "device_id": "Camera"
+        },
+        "description": "Select the camera to add.",
+        "title": "Select an Imou camera"
+      },
+      "reconfigure": {
+        "data": {
+          "account": "Imou account",
+          "country": "Account country code",
+          "ffmpeg_bin": "FFmpeg executable",
+          "name": "Camera name",
+          "password": "Imou password",
+          "width": "Stream width"
+        },
+        "description": "Sign in again to refresh this camera's private session. Your Imou account and password are not stored.",
+        "title": "Refresh Imou Direct"
       }
     }
   }

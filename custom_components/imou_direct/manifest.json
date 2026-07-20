@@ -6,8 +6,8 @@
   "dependencies": ["stream"],
   "documentation": "https://github.com/skeltavik/imou-direct",
   "integration_type": "device",
-  "iot_class": "cloud_push",
+  "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/skeltavik/imou-direct/issues",
   "requirements": [],
-  "version": "0.1.1"
+  "version": "0.2.0"
 }

@@ -18,7 +18,10 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 
 def _digest(body: bytes, algorithm: str) -> str:
-    return base64.b64encode(hashlib.new(algorithm, body).digest()).decode()
+    digest = hashlib.new(
+        algorithm, body, usedforsecurity=algorithm.lower() != "md5"
+    ).digest()
+    return base64.b64encode(digest).decode()
 
 
 def _new_nonce() -> str:
@@ -132,6 +135,9 @@ def fetch_transfer_url(config: dict, timeout: int = 20) -> str:
 
 def build_play_request(config: dict, transfer_url: str) -> bytes:
     stream = config["stream"]
+    if not stream.get("play_template_hex"):
+        return _build_generic_play_request(stream, transfer_url)
+
     template = bytes.fromhex(stream["play_template_hex"])
     head, separator, body = template.partition(b"\r\n\r\n")
     if not separator:
@@ -178,12 +184,121 @@ def build_play_request(config: dict, transfer_url: str) -> bytes:
     return "\r\n".join(lines).encode() + separator + body
 
 
+def _parse_transfer_url(transfer_url: str) -> urllib.parse.SplitResult:
+    parsed = urllib.parse.urlsplit(
+        transfer_url if "://" in transfer_url else "//" + transfer_url
+    )
+    if not parsed.hostname or not parsed.port:
+        raise RuntimeError("transfer URL has no host and port")
+    return parsed
+
+
+def _build_generic_play_request(stream: dict, transfer_url: str) -> bytes:
+    """Build the Imou PLAY request without retaining a captured template."""
+    parsed = _parse_transfer_url(transfer_url)
+    query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    query = [(key, value) for key, value in query if key not in {"trackID", "method"}]
+    query.extend((("trackID", "31"), ("method", "0")))
+    target = urllib.parse.urlunsplit(
+        ("", "", parsed.path, urllib.parse.urlencode(query), "")
+    )
+
+    nonce = secrets.token_hex(16)
+    created = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    effective_key = stream.get("wsse_key") or stream["device_sn"]
+    credential_material = (
+        stream["username"]
+        + ":Login to "
+        + effective_key
+        + ":"
+        + stream["password"]
+    ).encode()
+    md5_token = hashlib.md5(credential_material, usedforsecurity=False).hexdigest().upper()
+    sha256_token = hashlib.sha256(credential_material).hexdigest().upper()
+    password_digest = base64.b64encode(
+        hashlib.sha1(
+            (nonce + created + md5_token).encode(), usedforsecurity=False
+        ).digest()
+    ).decode()
+    lightweight_digest = base64.b64encode(
+        hashlib.sha256((nonce + created + sha256_token).encode()).digest()
+    ).decode()
+
+    session_version = secrets.randbits(32)
+    body = (
+        "v=0\r\n"
+        f"o=- {session_version} {session_version} IN IP4 0.0.0.0\r\n"
+        "s=Media Server\r\n"
+        "c=IN IP4 0.0.0.0\r\n"
+        "t=0 0\r\n"
+        "a=control:*\r\n"
+        "a=packetization-supported:DH\r\n"
+        "a=rtppayload-supported:DH\r\n"
+        "a=range:npt=now-\r\n"
+        "m=video 0 RTP/AVP 0\r\n"
+        "a=control:trackID=0\r\n"
+        "a=framerate:0\r\n"
+        "a=rtpmap:0 disable/90000\r\n"
+        "a=fmtp\r\n"
+        "a=sendonly\r\n"
+        "m=audio 0 RTP/AVP 0\r\n"
+        "a=control:trackID=1\r\n"
+        "a=rtpmap:0 disable/8000\r\n"
+        "a=sendonly\r\n"
+        "m=audio 0 RTP/AVP 0\r\n"
+        "a=control:trackID=2\r\n"
+        "a=rtpmap:0 disable/8000\r\n"
+        "a=sendonly\r\n"
+        "m=application 0 RTP/AVP 100\r\n"
+        "a=control:trackID=3\r\n"
+        "a=rtpmap:100 stream-assist-frame/90000\r\n"
+        "a=sendonly\r\n"
+        "m=application 0 RTP/AVP 107\r\n"
+        "a=control:trackID=4\r\n"
+        "a=rtpmap:107 vnd.onvif.metadata/90000\r\n"
+        "a=sendonly\r\n"
+        "m=audio 0 RTP/AVP 8\r\n"
+        "a=control:trackID=5\r\n"
+        "a=rtpmap:8 PCMA/16000\r\n"
+        "a=sendonly\r\n"
+    ).encode()
+    wsse = (
+        f'UsernameToken Username="{stream["username"]}", '
+        f'PasswordDigest="{password_digest}", '
+        f'LightweightDigest="{lightweight_digest}", '
+        f'Nonce="{nonce}", Created="{created}"'
+    )
+    headers = [
+        f"PLAY {target} HTTP/1.1",
+        "Accpet-Sdp: Private",
+        'Authorization: WSSE profile="UsernameToken"',
+        "Connect-Type: P2P",
+        "Connection: keep-alive",
+        "Cseq: 0",
+        f"Host: {parsed.netloc}",
+        f"Private-Length: {len(body)}",
+        "Private-Type: application/sdp",
+        "Speed: 1.000000",
+        "User-Agent: Http Stream Client/1.0",
+        f"WSSE: {wsse}",
+        f"x-pcs-request-id: {secrets.token_hex(8)}",
+    ]
+    return "\r\n".join(headers).encode() + b"\r\n\r\n" + body
+
+
 def _header(request: bytes, name: bytes) -> bytes:
     prefix = name.lower() + b":"
     for line in request.split(b"\r\n")[1:]:
         if line.lower().startswith(prefix):
             return line.split(b":", 1)[1].strip()
     raise RuntimeError("PLAY host header missing")
+
+
+def _play_response_length(header: bytes) -> int:
+    for line in header.split(b"\r\n"):
+        if line.lower().startswith((b"content-length:", b"private-length:")):
+            return int(line.split(b":", 1)[1])
+    raise RuntimeError("PLAY SDP length missing")
 
 
 def tls_play_bytes(
@@ -209,12 +324,7 @@ def tls_play_bytes(
             status_line = header.split(b"\r\n", 1)[0]
             if b" 200 " not in status_line:
                 raise RuntimeError("PLAY response was not HTTP 200")
-            content_length = None
-            for line in header.split(b"\r\n"):
-                if line.lower().startswith(b"content-length:"):
-                    content_length = int(line.split(b":", 1)[1])
-            if content_length is None:
-                raise RuntimeError("PLAY SDP content length missing")
+            content_length = _play_response_length(header)
             while len(remainder) < content_length:
                 chunk = tls.recv(65536)
                 if not chunk:
@@ -244,7 +354,9 @@ def derive_frame_key(config: dict) -> bytes:
         + ":"
         + stream["password"]
     ).encode()
-    login_md5 = hashlib.md5(material).hexdigest().upper().encode()
+    login_md5 = (
+        hashlib.md5(material, usedforsecurity=False).hexdigest().upper().encode()
+    )
     return hashlib.pbkdf2_hmac(
         "sha256", login_md5, effective_key.encode(), 20_000, dklen=32
     )

@@ -1,23 +1,48 @@
 {
   "config": {
     "abort": {
-      "already_configured": "Dit configuratiebestand is al ingesteld."
+      "already_configured": "Dit Imou-toestel is al ingesteld.",
+      "discovery_expired": "De toestelzoekopdracht is verlopen. Start de configuratie opnieuw."
     },
     "error": {
-      "cannot_read": "Het configuratiebestand kan niet worden gelezen.",
+      "cannot_connect": "Kan geen verbinding maken met Imou.",
+      "device_not_found": "De ingestelde camera is niet gevonden in dit account.",
       "ffmpeg_missing": "Het ingestelde FFmpeg-programma werd niet gevonden.",
-      "invalid_config": "Het configuratiebestand is geen geldig Imou Direct-bootstrapbestand."
+      "invalid_auth": "Het Imou-account of wachtwoord is onjuist.",
+      "no_supported_devices": "Er is geen ondersteunde camera gevonden in dit Imou-account.",
+      "unknown": "Imou gaf een onverwacht antwoord. Probeer het later opnieuw."
     },
     "step": {
       "user": {
         "data": {
-          "config_path": "Privé-bootstrapbestand",
+          "account": "Imou-account",
+          "country": "Landcode van het account",
           "ffmpeg_bin": "FFmpeg-programma",
           "name": "Cameranaam",
+          "password": "Imou-wachtwoord",
           "width": "Streambreedte"
         },
-        "description": "Selecteer de privé-bootstrap-JSON uit de reverse-engineeringtools. Houd dit bestand geheim.",
+        "description": "Meld je één keer aan om je camera te vinden. Je Imou-wachtwoord wordt alleen tijdens deze stap gebruikt en niet opgeslagen. De resulterende toestelgegevens blijven binnen Home Assistant.",
         "title": "Imou Direct instellen"
+      },
+      "device": {
+        "data": {
+          "device_id": "Camera"
+        },
+        "description": "Selecteer de camera die je wilt toevoegen.",
+        "title": "Selecteer een Imou-camera"
+      },
+      "reconfigure": {
+        "data": {
+          "account": "Imou-account",
+          "country": "Landcode van het account",
+          "ffmpeg_bin": "FFmpeg-programma",
+          "name": "Cameranaam",
+          "password": "Imou-wachtwoord",
+          "width": "Streambreedte"
+        },
+        "description": "Meld je opnieuw aan om de privésessie van deze camera te vernieuwen. Je Imou-account en wachtwoord worden niet opgeslagen.",
+        "title": "Imou Direct vernieuwen"
       }
     }
   }

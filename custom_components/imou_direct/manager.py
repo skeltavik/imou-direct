@@ -6,6 +6,7 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import logging
+import copy
 from pathlib import Path
 import shutil
 import subprocess
@@ -19,10 +20,8 @@ from .core import HevcExtractor, derive_frame_key, fetch_transfer_url, tls_play_
 _LOGGER = logging.getLogger(__name__)
 
 
-def validate_bootstrap_file(path: str) -> dict:
-    """Load a bootstrap file and validate only its public shape."""
-    with Path(path).expanduser().open(encoding="utf-8") as source:
-        config = json.load(source)
+def validate_bootstrap(config: dict) -> dict:
+    """Validate and copy a private stream bootstrap."""
     if not isinstance(config, dict):
         raise ValueError("bootstrap root is not an object")
 
@@ -41,8 +40,6 @@ def validate_bootstrap_file(path: str) -> dict:
             "username",
             "password",
             "device_sn",
-            "transfer_hmac_key_hex",
-            "play_template_hex",
         ),
     }
     for section, keys in required.items():
@@ -53,7 +50,26 @@ def validate_bootstrap_file(path: str) -> dict:
             raise ValueError(f"missing field in {section} section")
     if not isinstance(config.get("request"), dict):
         raise ValueError("missing request section")
-    return config
+    template = config["stream"].get("play_template_hex")
+    if template is not None and (not isinstance(template, str) or not template):
+        raise ValueError("invalid PLAY template")
+    if template is not None:
+        try:
+            transfer_key = bytes.fromhex(
+                config["stream"]["transfer_hmac_key_hex"]
+            )
+        except (KeyError, ValueError) as error:
+            raise ValueError("invalid transfer key") from error
+        if len(transfer_key) != 32:
+            raise ValueError("invalid transfer key")
+    return copy.deepcopy(config)
+
+
+def validate_bootstrap_file(path: str) -> dict:
+    """Load and validate a legacy bootstrap file."""
+    with Path(path).expanduser().open(encoding="utf-8") as source:
+        config = json.load(source)
+    return validate_bootstrap(config)
 
 
 class StreamState:

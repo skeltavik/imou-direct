@@ -6,8 +6,14 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryError
 
-from .const import CONF_CONFIG_PATH, CONF_FFMPEG_BIN, CONF_WIDTH, PLATFORMS
-from .manager import DirectStreamManager, validate_bootstrap_file
+from .const import (
+    CONF_BOOTSTRAP,
+    CONF_CONFIG_PATH,
+    CONF_FFMPEG_BIN,
+    CONF_WIDTH,
+    PLATFORMS,
+)
+from .manager import DirectStreamManager, validate_bootstrap, validate_bootstrap_file
 
 type ImouDirectConfigEntry = ConfigEntry[DirectStreamManager]
 
@@ -18,9 +24,12 @@ async def async_setup_entry(
     """Set up Imou Direct from a config entry."""
     manager: DirectStreamManager | None = None
     try:
-        config = await hass.async_add_executor_job(
-            validate_bootstrap_file, entry.data[CONF_CONFIG_PATH]
-        )
+        if CONF_BOOTSTRAP in entry.data:
+            config = validate_bootstrap(entry.data[CONF_BOOTSTRAP])
+        else:
+            config = await hass.async_add_executor_job(
+                validate_bootstrap_file, entry.data[CONF_CONFIG_PATH]
+            )
         config.setdefault("output", {})["width"] = entry.data[CONF_WIDTH]
         manager = DirectStreamManager(config, entry.data[CONF_FFMPEG_BIN])
         await hass.async_add_executor_job(manager.start)
