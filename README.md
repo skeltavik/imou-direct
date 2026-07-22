@@ -64,6 +64,10 @@ Existing version 0.2 entries do not yet contain the additional LAN credentials.
 Use **Reconfigure** once after upgrading to populate them; until then the
 default mode safely uses its cloud fallback.
 
+For the complete recovered sequence—from XAPK/JADX and native/runtime analysis
+through PCS bootstrap, LAN PTCP/DHHTTP, `PLAY`, RTP/DHAV decryption, FFmpeg, and
+Home Assistant delivery—see [Technical stream flow](docs/TECHNICAL_FLOW.md).
+
 ## Install with HACS
 
 1. In HACS, open **Custom repositories**.
