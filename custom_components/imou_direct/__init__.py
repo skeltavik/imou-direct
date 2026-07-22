@@ -10,8 +10,10 @@ from .const import (
     CONF_BOOTSTRAP,
     CONF_CONFIG_PATH,
     CONF_FFMPEG_BIN,
+    CONF_TRANSPORT_MODE,
     CONF_WIDTH,
     DEFAULT_FFMPEG_BIN,
+    DEFAULT_TRANSPORT_MODE,
     PLATFORMS,
 )
 from .manager import DirectStreamManager, validate_bootstrap, validate_bootstrap_file
@@ -32,6 +34,9 @@ async def async_setup_entry(
                 validate_bootstrap_file, entry.data[CONF_CONFIG_PATH]
             )
         config.setdefault("output", {})["width"] = entry.data[CONF_WIDTH]
+        config["output"]["transport_mode"] = entry.data.get(
+            CONF_TRANSPORT_MODE, DEFAULT_TRANSPORT_MODE
+        )
         manager = DirectStreamManager(
             config, entry.data.get(CONF_FFMPEG_BIN, DEFAULT_FFMPEG_BIN)
         )

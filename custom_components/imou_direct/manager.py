@@ -16,6 +16,13 @@ import time
 import urllib.parse
 
 from .core import HevcExtractor, derive_frame_key, fetch_transfer_url, tls_play_bytes
+from .const import (
+    DEFAULT_TRANSPORT_MODE,
+    TRANSPORT_CLOUD_ONLY,
+    TRANSPORT_LOCAL_ONLY,
+    TRANSPORT_MODES,
+)
+from .lan import LanP2PError, LanP2PTransport, has_lan_config
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -190,6 +197,12 @@ def _stream_worker(
     width = int(output_config.get("width", 960))
     hls_time = int(output_config.get("hls_time", 2))
     reconnect_delay = float(output_config.get("reconnect_delay", 3))
+    local_frame_timeout = float(output_config.get("local_frame_timeout", 15))
+    transport_mode = str(
+        output_config.get("transport_mode", DEFAULT_TRANSPORT_MODE)
+    )
+    if transport_mode not in TRANSPORT_MODES:
+        transport_mode = DEFAULT_TRANSPORT_MODE
 
     while not stop.is_set():
         process: subprocess.Popen[bytes] | None = None
@@ -198,8 +211,6 @@ def _stream_worker(
                 old_segment.unlink(missing_ok=True)
             (output / "stream.m3u8").unlink(missing_ok=True)
 
-            transfer_url = fetch_transfer_url(config)
-            extractor = HevcExtractor(derive_frame_key(config))
             process = subprocess.Popen(
                 _ffmpeg_command(ffmpeg_bin, output, width, hls_time),
                 stdin=subprocess.PIPE,
@@ -209,20 +220,58 @@ def _stream_worker(
             state.set_process(process)
             if process.stdin is None:
                 raise RuntimeError("ffmpeg input unavailable")
-            state.set_connected(True)
+            candidates: list[str] = []
+            if transport_mode != TRANSPORT_CLOUD_ONLY and has_lan_config(config):
+                candidates.append("local")
+            elif transport_mode == TRANSPORT_LOCAL_ONLY:
+                raise LanP2PError("LAN configuration is unavailable")
 
-            for chunk in tls_play_bytes(config, transfer_url, stop=stop):
-                if stop.is_set():
-                    break
-                for hevc in extractor.feed(chunk):
-                    process.stdin.write(hevc)
-                    process.stdin.flush()
-                    state.frame_received()
-                if process.poll() is not None:
-                    raise RuntimeError("ffmpeg exited")
+            if transport_mode != TRANSPORT_LOCAL_ONLY:
+                candidates.append("cloud")
+
+            for index, name in enumerate(candidates):
+                try:
+                    if name == "local":
+                        local = LanP2PTransport(config)
+                        chunks = local.stream(stop=stop)
+                        frame_key = local.frame_key
+                    else:
+                        transfer_url = fetch_transfer_url(config)
+                        chunks = tls_play_bytes(config, transfer_url, stop=stop)
+                        frame_key = derive_frame_key(config)
+                    extractor = HevcExtractor(frame_key)
+                    last_frame_at = time.monotonic()
+                    for chunk in chunks:
+                        if stop.is_set():
+                            break
+                        frames = extractor.feed(chunk)
+                        for hevc in frames:
+                            process.stdin.write(hevc)
+                            process.stdin.flush()
+                            state.frame_received()
+                            last_frame_at = time.monotonic()
+                        if (
+                            name == "local"
+                            and not frames
+                            and time.monotonic() - last_frame_at
+                            >= local_frame_timeout
+                        ):
+                            raise LanP2PError("LAN stream produced no video frames")
+                        if process.poll() is not None:
+                            raise RuntimeError("ffmpeg exited")
+                    if stop.is_set():
+                        break
+                    if name == "local":
+                        raise LanP2PError("LAN stream ended")
+                    raise RuntimeError("transfer stream ended")
+                except LanP2PError:
+                    has_fallback = index + 1 < len(candidates)
+                    if name != "local" or not has_fallback:
+                        raise
+                    _LOGGER.info("Local Imou stream unavailable; using cloud fallback")
 
             if not stop.is_set():
-                raise RuntimeError("transfer stream ended")
+                raise RuntimeError("stream candidates exhausted")
         except Exception as error:  # noqa: BLE001 - reconnect boundary
             if not stop.is_set():
                 state.reconnecting()

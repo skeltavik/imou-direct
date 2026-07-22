@@ -410,15 +410,31 @@ class HevcExtractor:
                 del self.wire[:marker]
                 if len(self.wire) < 4:
                     break
+            header_size = 4
             size = int.from_bytes(self.wire[2:4], "big")
-            if len(self.wire) < 4 + size:
+            if size == 0:
+                if len(self.wire) < 10:
+                    break
+                size = int.from_bytes(self.wire[2:6], "big")
+                header_size = 6
+            elif len(self.wire) >= 10 and self.wire[6:10] == b"DHAV":
+                size = int.from_bytes(self.wire[2:6], "big")
+                header_size = 6
+            if size <= 0 or size > 8 * 1024 * 1024:
+                del self.wire[0]
+                continue
+            if len(self.wire) < header_size + size:
                 break
-            packet = bytes(self.wire[4 : 4 + size])
-            del self.wire[: 4 + size]
-            parsed = _rtp_payload(packet)
-            if parsed is not None and parsed[0] == 98:
+            packet = bytes(self.wire[header_size : header_size + size])
+            del self.wire[: header_size + size]
+            if packet.startswith(b"DHAV"):
+                self.dhav.extend(packet)
+            else:
+                parsed = _rtp_payload(packet)
+                if parsed is None or parsed[0] != 98:
+                    continue
                 self.dhav.extend(parsed[2])
-                payloads.extend(self._drain_dhav())
+            payloads.extend(self._drain_dhav())
         return payloads
 
     def _drain_dhav(self) -> list[bytes]:

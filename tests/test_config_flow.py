@@ -124,6 +124,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         }
         self.assertIsInstance(validators["country"], _Selector)
         self.assertIsNot(validators["country"], _FLOW._country)
+        self.assertEqual(
+            validators["transport_mode"].config["translation_key"],
+            "transport_mode",
+        )
         self.assertNotIn("ffmpeg_bin", validators)
 
     async def test_invalid_country_is_reported_on_the_field(self) -> None:
@@ -136,6 +140,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "account": "owner@example.test",
                 "password": "account-password",
                 "country": "Belgium",
+                "transport_mode": "local_first",
                 "width": 960,
             }
         )
@@ -189,6 +194,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                     "account": "owner@example.test",
                     "password": "account-password",
                     "country": "BE",
+                    "transport_mode": "local_first",
                     "width": 960,
                 }
             )
@@ -235,6 +241,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                     "account": "owner@example.test",
                     "password": "account-password",
                     "country": " be ",
+                    "transport_mode": "local_first",
                     "width": 960,
                 }
             )
@@ -250,6 +257,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("account-password", serialized)
         self.assertEqual(result["data"]["bootstrap"], bootstrap)
         self.assertEqual(result["data"]["country"], "BE")
+        self.assertEqual(result["data"]["transport_mode"], "local_first")
         self.assertNotIn("ffmpeg_bin", result["data"])
         self.assertEqual(discovered_with[0][2], "BE")
         self.assertEqual(validated_ffmpeg, ["ffmpeg"])
