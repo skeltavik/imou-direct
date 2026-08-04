@@ -55,9 +55,10 @@ The setup form offers three transport modes:
 
 - **Local first, with cloud fallback** (default) tries the LAN transport and
   requests a temporary Imou transfer only if the local connection fails.
-- **Local only** never calls the Imou media-transfer service at runtime. This
-  mode continues to work without WAN access after a successful setup, provided
-  Home Assistant and the camera remain on the same LAN.
+- **Local only** never calls the Imou media-transfer service at runtime. It is
+  designed to keep working without WAN access after a successful setup, provided
+  Home Assistant and the camera remain on the same LAN. The final WAN-blocked
+  end-to-end independence test is still pending.
 - **Cloud only** retains the version 0.2 runtime behavior.
 
 Existing version 0.2 entries do not yet contain the additional LAN credentials.

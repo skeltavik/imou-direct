@@ -12,6 +12,31 @@ on:
 permissions: {}
 
 jobs:
+  offline-tests:
+    name: Offline tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 2
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.13"
+      - name: Install test dependencies
+        run: python -m pip install --requirement requirements-test.txt
+      - name: Run offline gate
+        run: |
+          ruff check custom_components tests
+          python -m unittest discover -s tests -v
+          python -m compileall -q custom_components tests
+          python -m json.tool custom_components/imou_direct/manifest.json >/dev/null
+          python -m json.tool custom_components/imou_direct/strings.json >/dev/null
+          python -m json.tool custom_components/imou_direct/translations/en.json >/dev/null
+          python -m json.tool custom_components/imou_direct/translations/nl.json >/dev/null
+          git diff HEAD^ HEAD --check
+
   hassfest:
     name: Hassfest validation
     runs-on: ubuntu-latest

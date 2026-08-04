@@ -41,7 +41,7 @@ async def async_setup_entry(
             config, entry.data.get(CONF_FFMPEG_BIN, DEFAULT_FFMPEG_BIN)
         )
         await hass.async_add_executor_job(manager.start)
-    except (OSError, ValueError, KeyError) as error:
+    except Exception as error:
         if manager is not None:
             await hass.async_add_executor_job(manager.stop)
         raise ConfigEntryError("Unable to start Imou Direct") from error

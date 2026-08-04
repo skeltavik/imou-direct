@@ -1,0 +1,3 @@
+cryptography==50.0.0
+ruff==0.15.2
+voluptuous==0.16.0

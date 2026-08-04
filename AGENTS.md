@@ -248,7 +248,8 @@ Maintain targeted runtime regression tests for those boundaries.
 
 The tracked test suite is intentionally offline. It imports component modules
 directly and uses lightweight Home Assistant stubs, so it can run without a
-full Home Assistant installation.
+full Home Assistant installation. CI installs the pinned dependencies from
+`requirements-test.txt`; keep that file synchronized with the local gate.
 
 Run the complete local gate after every tracked code change:
 
@@ -349,8 +350,8 @@ documentation; summarize only what is necessary and remove identifiers.
 - Do not push, tag, create a release, or change GitHub state unless the user has
   requested publication.
 - For a release, update `custom_components/imou_direct/manifest.json`, run the
-  full local gate, push the intended commit, wait for both HACS and Hassfest to
-  pass, and only then create a non-draft version tag/release.
+  full local gate, push the intended commit, wait for Offline tests, HACS, and
+  Hassfest to pass, and only then create a non-draft version tag/release.
 - Use semantic versioning: patch for compatible fixes, minor for new compatible
   behavior, and major for deliberate compatibility breaks.
 - Release notes must state user-visible behavior and meaningful security or

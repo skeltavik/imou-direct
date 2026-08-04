@@ -39,6 +39,65 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual(output, [payload])
 
+    def test_extractor_accepts_short_rtp_when_sequence_and_timestamp_start_dhav(
+        self,
+    ) -> None:
+        payload = b"\x00\x00\x00\x01\x40\x01synthetic-short-rtp"
+        frame_length = 24 + len(payload) + 8
+        header = bytearray(24)
+        header[:4] = b"DHAV"
+        header[4] = 0xFD
+        header[12:16] = frame_length.to_bytes(4, "little")
+        frame = (
+            bytes(header)
+            + payload
+            + b"dhav"
+            + frame_length.to_bytes(4, "little")
+        )
+        rtp = b"\x80\x62DHAV" + bytes(6) + frame
+        packet = b"$\x02" + len(rtp).to_bytes(2, "big") + rtp
+        extractor = _CORE.HevcExtractor(bytes(32))
+
+        self.assertEqual(extractor.feed(packet), [payload])
+
+    def test_extractor_accepts_extended_dhav_length_that_looks_like_rtp(self) -> None:
+        frame_length = 0x00018062
+        payload = b"\x00\x00\x00\x01\x40\x01" + bytes(frame_length - 38)
+        header = bytearray(24)
+        header[:4] = b"DHAV"
+        header[4] = 0xFD
+        header[12:16] = frame_length.to_bytes(4, "little")
+        frame = (
+            bytes(header)
+            + payload
+            + b"dhav"
+            + frame_length.to_bytes(4, "little")
+        )
+        packet = b"$\x02" + len(frame).to_bytes(4, "big") + frame
+        extractor = _CORE.HevcExtractor(bytes(32))
+
+        self.assertEqual(extractor.feed(packet[:21]), [])
+        self.assertEqual(extractor.feed(packet[21:]), [payload])
+
+    def test_extractor_waits_for_large_extended_interleaved_length(self) -> None:
+        payload = b"\x00\x00\x00\x01\x40\x01" + bytes(65_498)
+        frame_length = 24 + len(payload) + 8
+        header = bytearray(24)
+        header[:4] = b"DHAV"
+        header[4] = 0xFD
+        header[12:16] = frame_length.to_bytes(4, "little")
+        frame = (
+            bytes(header)
+            + payload
+            + b"dhav"
+            + frame_length.to_bytes(4, "little")
+        )
+        packet = b"$\x02" + len(frame).to_bytes(4, "big") + frame
+        extractor = _CORE.HevcExtractor(bytes(32))
+
+        self.assertEqual(extractor.feed(packet[:5]), [])
+        self.assertEqual(extractor.feed(packet[5:]), [payload])
+
     def test_play_response_accepts_both_length_headers(self) -> None:
         self.assertEqual(
             _CORE._play_response_length(b"HTTP/1.1 200 OK\r\nPrivate-Length: 717"),
