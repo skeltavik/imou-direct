@@ -8,6 +8,7 @@ import json
 import logging
 import copy
 from pathlib import Path
+import queue
 import shutil
 import subprocess
 import tempfile
@@ -186,6 +187,63 @@ def _ffmpeg_command(
     ]
 
 
+def _local_stream_chunks(
+    transport: LanP2PTransport,
+    stop: threading.Event,
+    timeout: float,
+):
+    """Yield LAN plaintext while enforcing silence timeout between yields."""
+    if timeout <= 0:
+        yield from transport.stream(stop=stop)
+        return
+
+    local_stop = threading.Event()
+    results: queue.Queue[tuple[bytes | None, Exception | None]] = queue.Queue(
+        maxsize=1
+    )
+
+    def send(result: tuple[bytes | None, Exception | None]) -> None:
+        while not local_stop.is_set():
+            try:
+                results.put(result, timeout=0.1)
+                return
+            except queue.Full:
+                continue
+
+    def consume() -> None:
+        try:
+            for chunk in transport.stream(stop=local_stop):
+                send((chunk, None))
+        except Exception as error:  # noqa: BLE001 - forwarded to worker thread
+            send((None, error))
+        finally:
+            send((None, None))
+
+    thread = threading.Thread(target=consume, name="imou-direct-lan", daemon=True)
+    thread.start()
+    deadline = time.monotonic() + timeout
+    try:
+        while not stop.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise LanP2PError("LAN stream produced no plaintext")
+            try:
+                chunk, error = results.get(timeout=min(0.1, remaining))
+            except queue.Empty:
+                continue
+            if error is not None:
+                raise error
+            if chunk is None:
+                return
+            deadline = time.monotonic() + timeout
+            yield chunk
+    finally:
+        local_stop.set()
+        thread.join(timeout=1)
+        if thread.is_alive():
+            raise RuntimeError("LAN transport did not stop")
+
+
 def _stream_worker(
     config: dict,
     output: Path,
@@ -233,7 +291,9 @@ def _stream_worker(
                 try:
                     if name == "local":
                         local = LanP2PTransport(config)
-                        chunks = local.stream(stop=stop)
+                        chunks = _local_stream_chunks(
+                            local, stop, local_frame_timeout
+                        )
                         frame_key = local.frame_key
                     else:
                         transfer_url = fetch_transfer_url(config)
@@ -244,7 +304,12 @@ def _stream_worker(
                     for chunk in chunks:
                         if stop.is_set():
                             break
-                        frames = extractor.feed(chunk)
+                        try:
+                            frames = extractor.feed(chunk)
+                        except RuntimeError as error:
+                            if name != "local":
+                                raise
+                            raise LanP2PError("LAN media parsing failed") from error
                         for hevc in frames:
                             process.stdin.write(hevc)
                             process.stdin.flush()
@@ -359,34 +424,38 @@ class DirectStreamManager:
         """Start the loopback server and stream worker."""
         if self._server is not None:
             return
-        executable = shutil.which(self._ffmpeg_bin)
-        if executable is None:
-            raise FileNotFoundError("ffmpeg executable not found")
-        self._ffmpeg_bin = executable
+        try:
+            executable = shutil.which(self._ffmpeg_bin)
+            if executable is None:
+                raise FileNotFoundError("ffmpeg executable not found")
+            self._ffmpeg_bin = executable
 
-        self._server = ThreadingHTTPServer(
-            ("127.0.0.1", 0), _handler_factory(self._output, self._state)
-        )
-        self._server.daemon_threads = True
-        self._server_thread = threading.Thread(
-            target=self._server.serve_forever,
-            name="imou-direct-http",
-            daemon=True,
-        )
-        self._worker_thread = threading.Thread(
-            target=_stream_worker,
-            args=(
-                self._config,
-                self._output,
-                self._ffmpeg_bin,
-                self._state,
-                self._stop,
-            ),
-            name="imou-direct-stream",
-            daemon=True,
-        )
-        self._server_thread.start()
-        self._worker_thread.start()
+            self._server = ThreadingHTTPServer(
+                ("127.0.0.1", 0), _handler_factory(self._output, self._state)
+            )
+            self._server.daemon_threads = True
+            self._server_thread = threading.Thread(
+                target=self._server.serve_forever,
+                name="imou-direct-http",
+                daemon=True,
+            )
+            self._worker_thread = threading.Thread(
+                target=_stream_worker,
+                args=(
+                    self._config,
+                    self._output,
+                    self._ffmpeg_bin,
+                    self._state,
+                    self._stop,
+                ),
+                name="imou-direct-stream",
+                daemon=True,
+            )
+            self._server_thread.start()
+            self._worker_thread.start()
+        except Exception:
+            self.stop()
+            raise
 
     def stop(self) -> None:
         """Stop all runtime work and remove transient media files."""
@@ -396,11 +465,15 @@ class DirectStreamManager:
             if self._server_thread is not None and self._server_thread.is_alive():
                 self._server.shutdown()
             self._server.server_close()
-        if self._server_thread is not None:
+        if self._server_thread is not None and self._server_thread.is_alive():
             self._server_thread.join(timeout=3)
-        if self._worker_thread is not None:
+        if self._worker_thread is not None and self._worker_thread.is_alive():
             self._worker_thread.join(timeout=7)
         self._server = None
+        if self._worker_thread is not None and self._worker_thread.is_alive():
+            raise RuntimeError("stream worker did not stop")
+        self._server_thread = None
+        self._worker_thread = None
         shutil.rmtree(self._output, ignore_errors=True)
 
     def health(self) -> dict[str, bool | float | int | None]:

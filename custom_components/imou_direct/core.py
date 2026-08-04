@@ -412,12 +412,17 @@ class HevcExtractor:
                     break
             header_size = 4
             size = int.from_bytes(self.wire[2:4], "big")
-            if size == 0:
-                if len(self.wire) < 10:
+            if len(self.wire) < 10:
+                break
+            if self.wire[6:10] == b"DHAV":
+                if len(self.wire) < 22:
                     break
-                size = int.from_bytes(self.wire[2:6], "big")
-                header_size = 6
-            elif len(self.wire) >= 10 and self.wire[6:10] == b"DHAV":
+                extended_size = int.from_bytes(self.wire[2:6], "big")
+                dhav_size = int.from_bytes(self.wire[18:22], "little")
+                if dhav_size == extended_size:
+                    size = extended_size
+                    header_size = 6
+            elif size == 0:
                 size = int.from_bytes(self.wire[2:6], "big")
                 header_size = 6
             if size <= 0 or size > 8 * 1024 * 1024:

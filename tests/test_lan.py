@@ -138,6 +138,117 @@ class LanTests(unittest.TestCase):
         _body, duplicate = session.accept(peer)
         self.assertTrue(duplicate)
 
+    def test_pending_message_precedes_preconnection_control(self) -> None:
+        self.assertFalse(
+            _LAN._is_preconnection_control(b"\x00\x00\x00", False, True)
+        )
+        self.assertTrue(
+            _LAN._is_preconnection_control(b"\x00\x00\x00", False, False)
+        )
+
+    def test_ptcp_message_framer_reassembles_fragmented_data(self) -> None:
+        realm = 0x12345678
+        frame = _LAN._ptcp_payload(realm, b"fragmented TLS record")
+        framer = _LAN._PTCPMessageFramer(realm)
+
+        self.assertEqual(framer.feed(frame[:7]), [])
+        self.assertEqual(framer.feed(frame[7:15]), [])
+        self.assertEqual(framer.feed(frame[15:]), [(0x10, b"fragmented TLS record")])
+
+    def test_ptcp_message_framer_preserves_status_then_data(self) -> None:
+        realm = 0x12345678
+        body = _LAN._ptcp_status(realm, b"CONN") + _LAN._ptcp_payload(
+            realm, b"TLS record"
+        )
+
+        self.assertEqual(
+            _LAN._PTCPMessageFramer(realm).feed(body),
+            [(0x12, b"CONN"), (0x10, b"TLS record")],
+        )
+
+    def test_ptcp_message_framer_preserves_data_then_status(self) -> None:
+        realm = 0x12345678
+        body = _LAN._ptcp_payload(realm, b"TLS record") + _LAN._ptcp_status(
+            realm, b"DISC"
+        )
+
+        self.assertEqual(
+            _LAN._PTCPMessageFramer(realm).feed(body),
+            [(0x10, b"TLS record"), (0x12, b"DISC")],
+        )
+
+    def test_ptcp_message_framer_does_not_consume_status_as_pending_data(self) -> None:
+        realm = 0x12345678
+        data = _LAN._ptcp_payload(realm, b"fragmented")
+        framer = _LAN._PTCPMessageFramer(realm)
+
+        self.assertEqual(framer.feed(data[:15]), [])
+        status = _LAN._ptcp_status(realm, b"CONN")
+        self.assertEqual(framer.feed(status[:7]), [])
+        self.assertEqual(framer.feed(status[7:]), [(0x12, b"CONN")])
+        self.assertEqual(framer.feed(data[15:]), [(0x10, b"fragmented")])
+
+    def test_ptcp_message_framer_restores_disproved_tentative_status_bytes(self) -> None:
+        realm = 0x12345678
+        payload = b"A\x12ZBC"
+        frame = _LAN._ptcp_payload(realm, payload)
+        framer = _LAN._PTCPMessageFramer(realm)
+
+        self.assertEqual(framer.feed(frame[:13]), [])
+        self.assertEqual(framer.feed(frame[13:14]), [])
+        self.assertEqual(framer.feed(frame[14:]), [(0x10, payload)])
+
+    def test_ptcp_message_framer_restores_full_false_status_prefix(self) -> None:
+        realm = 0x12345678
+        payload = b"A\x12\x00\x00\x00\x87\x65\x43\x21BC"
+        frame = _LAN._ptcp_payload(realm, payload)
+        framer = _LAN._PTCPMessageFramer(realm)
+
+        self.assertEqual(framer.feed(frame[:13]), [])
+        self.assertEqual(framer.feed(frame[13:21]), [])
+        self.assertEqual(framer.feed(frame[21:]), [(0x10, payload)])
+
+    def test_ptcp_message_framer_preserves_coalesced_data(self) -> None:
+        realm = 0x12345678
+        body = _LAN._ptcp_payload(realm, b"first") + _LAN._ptcp_payload(
+            realm, b"second"
+        )
+
+        self.assertEqual(
+            _LAN._PTCPMessageFramer(realm).feed(body),
+            [(0x10, b"first"), (0x10, b"second")],
+        )
+
+    def test_ptcp_message_framer_rejects_invalid_realm(self) -> None:
+        framer = _LAN._PTCPMessageFramer(0x12345678)
+
+        with self.assertRaisesRegex(_LAN.LanP2PError, "invalid LAN PTCP payload"):
+            framer.feed(_LAN._ptcp_payload(0x87654321, b"wrong realm"))
+
+    def test_ptcp_message_framer_allows_bounded_data_larger_than_datagram(self) -> None:
+        realm = 0x12345678
+        payload = b"x" * (_LAN.MAX_DATAGRAM + 1)
+        frame = _LAN._ptcp_payload(realm, payload)
+        framer = _LAN._PTCPMessageFramer(realm)
+
+        self.assertEqual(framer.feed(frame[: _LAN.MAX_DATAGRAM]), [])
+        self.assertEqual(
+            framer.feed(frame[_LAN.MAX_DATAGRAM :]), [(0x10, payload)]
+        )
+
+    def test_ptcp_message_framer_rejects_oversize_data(self) -> None:
+        header = (
+            (
+                0x10000000
+                | (_LAN.MAX_PLAY_HEADER + _LAN.MAX_PLAY_BODY + 1)
+            ).to_bytes(4, "big")
+            + (0x12345678).to_bytes(4, "big")
+            + b"\x00" * 4
+        )
+
+        with self.assertRaisesRegex(_LAN.LanP2PError, "invalid LAN PTCP payload"):
+            _LAN._PTCPMessageFramer(0x12345678).feed(header)
+
 
 if __name__ == "__main__":
     unittest.main()

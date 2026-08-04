@@ -280,6 +280,96 @@ class _PTCPSession:
         return body, duplicate
 
 
+class _PTCPMessageFramer:
+    """Incrementally split realm-bound PTCP status and data messages."""
+
+    _STATUS_SIZE = 16
+
+    def __init__(self, realm: int) -> None:
+        self._realm = realm
+        self._buffer = bytearray()
+        self._status_buffer = bytearray()
+
+    @property
+    def pending(self) -> bool:
+        """Return whether a fragmented inner message is being buffered."""
+        return bool(self._buffer or self._status_buffer)
+
+    def _status_header(self) -> bytes:
+        return b"\x12\x00\x00\x00" + self._realm.to_bytes(4, "big") + b"\x00" * 4
+
+    def _take_interleaved_statuses(
+        self, data: bytes, messages: list[tuple[int, bytes]]
+    ) -> bytes:
+        """Remove status frames arriving while a data frame is incomplete."""
+        remaining = data
+        expected = self._status_header()
+        while self._buffer or self._status_buffer:
+            if self._status_buffer:
+                needed = self._STATUS_SIZE - len(self._status_buffer)
+                self._status_buffer.extend(remaining[:needed])
+                remaining = remaining[needed:]
+                if not expected.startswith(self._status_buffer[:12]):
+                    remaining = bytes(self._status_buffer) + remaining
+                    self._status_buffer.clear()
+                    break
+                if len(self._status_buffer) < self._STATUS_SIZE:
+                    return b""
+                messages.append((0x12, bytes(self._status_buffer[12:])))
+                self._status_buffer.clear()
+                continue
+            if not remaining or remaining[0] != 0x12:
+                break
+            prefix_length = min(len(remaining), 12)
+            if not expected.startswith(remaining[:prefix_length]):
+                break
+            if len(remaining) < self._STATUS_SIZE:
+                self._status_buffer.extend(remaining)
+                return b""
+            messages.append((0x12, remaining[12:self._STATUS_SIZE]))
+            remaining = remaining[self._STATUS_SIZE :]
+        return remaining
+
+    def feed(self, data: bytes) -> list[tuple[int, bytes]]:
+        """Consume PTCP inner bytes and return every complete typed message."""
+        if len(data) > MAX_DATAGRAM:
+            raise LanP2PError("invalid LAN PTCP payload")
+        messages: list[tuple[int, bytes]] = []
+        data = self._take_interleaved_statuses(data, messages)
+        self._buffer.extend(data)
+        if (
+            len(self._buffer) + len(self._status_buffer)
+            > MAX_PLAY_HEADER + MAX_PLAY_BODY + 12 + MAX_DATAGRAM
+        ):
+            raise LanP2PError("invalid LAN PTCP payload")
+        while len(self._buffer) >= 12:
+            descriptor = int.from_bytes(self._buffer[:4], "big")
+            kind = descriptor >> 24
+            if int.from_bytes(self._buffer[4:8], "big") != self._realm:
+                raise LanP2PError("invalid LAN PTCP payload")
+            if kind == 0x10:
+                length = descriptor & 0xFFFFFF
+                if length > MAX_PLAY_HEADER + MAX_PLAY_BODY:
+                    raise LanP2PError("invalid LAN PTCP payload")
+                message_length = 12 + length
+            elif kind == 0x12:
+                if descriptor != 0x12000000:
+                    raise LanP2PError("invalid LAN PTCP payload")
+                message_length = self._STATUS_SIZE
+            else:
+                raise LanP2PError("invalid LAN PTCP payload")
+            if len(self._buffer) < message_length:
+                break
+            messages.append((kind, bytes(self._buffer[12:message_length])))
+            del self._buffer[:message_length]
+        return messages
+
+
+def _is_preconnection_control(body: bytes, connected: bool, pending: bool) -> bool:
+    """Return whether a PTCP body is pre-connection control traffic."""
+    return not pending and not connected and body.startswith(b"\x00")
+
+
 def _response_length(header: bytes) -> int:
     for line in header.split(b"\r\n"):
         if line.lower().startswith((b"private-length:", b"content-length:")):
@@ -347,6 +437,7 @@ class LanP2PTransport:
             raise LanP2PError("LAN socket setup failed") from error
         ptcp = _PTCPSession()
         realm = secrets.randbits(32)
+        message_framer = _PTCPMessageFramer(realm)
         peer: tuple[str, int] | None = None
         connected = False
         play_sent = False
@@ -459,26 +550,24 @@ class LanP2PTransport:
                     send_body()
                 if duplicate:
                     continue
-                if body.startswith(b"\x00") and not connected:
+                if _is_preconnection_control(
+                    body, connected, message_framer.pending
+                ):
                     port = int(self._lan.get("p2p_port") or DEFAULT_DEVICE_PORT)
                     send_body(_ptcp_bind(realm, port))
-                elif body.startswith(b"\x12") and len(body) >= 12:
-                    if int.from_bytes(body[4:8], "big") != realm:
-                        continue
-                    status = body[12:]
-                    if status == b"CONN":
-                        connected = True
+                elif message_framer.pending or body.startswith((b"\x10", b"\x12")):
+                    for kind, payload in message_framer.feed(body):
+                        if kind == 0x12:
+                            if payload == b"CONN":
+                                connected = True
+                                for chunk in drive_tls():
+                                    yield chunk
+                            elif payload == b"DISC":
+                                raise LanP2PError("LAN peer disconnected")
+                            continue
+                        tls_in.write(payload)
                         for chunk in drive_tls():
                             yield chunk
-                    elif status == b"DISC":
-                        raise LanP2PError("LAN peer disconnected")
-                elif body.startswith(b"\x10") and len(body) >= 12:
-                    length = int.from_bytes(body[:4], "big") & 0xFFFFFF
-                    if int.from_bytes(body[4:8], "big") != realm or length > len(body) - 12:
-                        raise LanP2PError("invalid LAN PTCP payload")
-                    tls_in.write(body[12 : 12 + length])
-                    for chunk in drive_tls():
-                        yield chunk
             return
         except (OSError, ssl.SSLError) as error:
             raise LanP2PError("LAN transport failed") from error
