@@ -8,8 +8,6 @@ persist the password.
 from __future__ import annotations
 
 import base64
-from collections.abc import Callable
-from dataclasses import dataclass
 import datetime as dt
 import hashlib
 import hmac
@@ -17,11 +15,13 @@ import json
 import secrets
 import string
 import time
-from typing import Any
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 API_REVISION = "191204"
 BOOTSTRAP_HOST = "https://app-v3.easy4ipcloud.com:443"

@@ -5,9 +5,9 @@ from __future__ import annotations
 import base64
 import importlib.util
 import json
-from pathlib import Path
 import sys
 import unittest
+from pathlib import Path
 
 _MODULE_PATH = (
     Path(__file__).parents[1] / "custom_components" / "imou_direct" / "cloud.py"

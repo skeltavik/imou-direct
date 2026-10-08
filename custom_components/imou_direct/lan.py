@@ -413,7 +413,7 @@ class LanP2PTransport:
                     raise LanP2PError("LAN transport stopped")
                 try:
                     response, peer = sock.recvfrom(MAX_DATAGRAM)
-                except socket.timeout:
+                except TimeoutError:
                     continue
                 if _header(response, b"CSeq") != cseq:
                     continue
@@ -540,7 +540,7 @@ class LanP2PTransport:
                     send_body(b"\x13" + b"\x00" * 11)
                 try:
                     packet, source = sock.recvfrom(MAX_DATAGRAM)
-                except socket.timeout:
+                except TimeoutError:
                     continue
                 if source != peer or not packet.startswith(b"PTCP"):
                     continue

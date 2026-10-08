@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 import sys
 import types
 import unittest
+from pathlib import Path
+from typing import ClassVar
 
 _COMPONENT = Path(__file__).parents[1] / "custom_components" / "imou_direct"
 
@@ -74,7 +75,7 @@ _CONST, _MANAGER, _INTEGRATION = _load_integration()
 class SetupLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_any_manager_startup_exception_stops_manager(self) -> None:
         class FailingManager:
-            instances: list[FailingManager] = []
+            instances: ClassVar[list[FailingManager]] = []
 
             def __init__(self, _config, _ffmpeg_bin) -> None:
                 self.stopped = False
