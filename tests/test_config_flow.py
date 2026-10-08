@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from pathlib import Path
 import sys
 import types
 import unittest
+from pathlib import Path
 
 _COMPONENT = Path(__file__).parents[1] / "custom_components" / "imou_direct"
 

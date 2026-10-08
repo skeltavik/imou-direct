@@ -26,7 +26,7 @@ def _digest(body: bytes, algorithm: str) -> str:
 
 def _new_nonce() -> str:
     alphabet = string.ascii_letters + string.digits
-    return str(int(dt.datetime.now().timestamp() * 1000)) + "".join(
+    return str(int(dt.datetime.now(dt.timezone.utc).timestamp() * 1000)) + "".join(
         secrets.choice(alphabet) for _ in range(32)
     )
 
@@ -310,8 +310,9 @@ def tls_play_bytes(
     context = ssl.create_default_context()
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
-    with socket.create_connection((host, int(port_text)), timeout=timeout) as raw:
-        with context.wrap_socket(raw, server_hostname=host) as tls:
+    with socket.create_connection((host, int(port_text)), timeout=timeout) as raw, context.wrap_socket(
+        raw, server_hostname=host
+    ) as tls:
             tls.settimeout(timeout)
             tls.sendall(request)
             pending = bytearray()
@@ -320,7 +321,7 @@ def tls_play_bytes(
                 if not chunk:
                     raise RuntimeError("PLAY response ended before headers")
                 pending.extend(chunk)
-            header, separator, remainder = bytes(pending).partition(b"\r\n\r\n")
+            header, _separator, remainder = bytes(pending).partition(b"\r\n\r\n")
             status_line = header.split(b"\r\n", 1)[0]
             if b" 200 " not in status_line:
                 raise RuntimeError("PLAY response was not HTTP 200")
@@ -335,7 +336,7 @@ def tls_play_bytes(
             while True:
                 try:
                     chunk = tls.recv(65536)
-                except socket.timeout:
+                except TimeoutError:
                     if stop is not None and stop.is_set():
                         return
                     continue

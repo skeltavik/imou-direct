@@ -5,9 +5,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import importlib.util
-from pathlib import Path
 import re
 import unittest
+from pathlib import Path
 
 _MODULE_PATH = Path(__file__).parents[1] / "custom_components" / "imou_direct" / "core.py"
 _SPEC = importlib.util.spec_from_file_location("imou_direct_core", _MODULE_PATH)

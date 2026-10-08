@@ -12,7 +12,13 @@ from typing import Any
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from .cloud import API_REVISION, CONTENT_TYPE, ImouDevice, ImouProtocolError, ImouSession
+from .cloud import (
+    API_REVISION,
+    CONTENT_TYPE,
+    ImouDevice,
+    ImouProtocolError,
+    ImouSession,
+)
 
 TRANSFER_API = "things.media.GetRealTransferStreamUrl"
 TRANSFER_URI = "/pcs/v1/" + TRANSFER_API
