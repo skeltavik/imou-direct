@@ -94,11 +94,11 @@ def build_local_channel_request(
     password = _required_text(lan, "device_password")
     p2p_ak = _required_text(lan, "dev_p2p_ak")
     p2p_sk = _required_text(lan, "dev_p2p_sk")
-    moment = now or dt.datetime.now(dt.timezone.utc)
+    moment = now or dt.datetime.now(dt.UTC)
     if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=dt.timezone.utc)
+        moment = moment.replace(tzinfo=dt.UTC)
     created_unix = str(int(moment.timestamp()))
-    created_wsse = moment.astimezone(dt.timezone.utc).isoformat(timespec="seconds")
+    created_wsse = moment.astimezone(dt.UTC).isoformat(timespec="seconds")
     body_nonce = secrets.randbelow(2**31) if body_nonce is None else body_nonce
     wsse_nonce = secrets.randbelow(2**31) if wsse_nonce is None else wsse_nonce
     rand_salt = secrets.token_hex(8).upper() if rand_salt is None else rand_salt

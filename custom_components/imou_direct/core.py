@@ -26,7 +26,7 @@ def _digest(body: bytes, algorithm: str) -> str:
 
 def _new_nonce() -> str:
     alphabet = string.ascii_letters + string.digits
-    return str(int(dt.datetime.now(dt.timezone.utc).timestamp() * 1000)) + "".join(
+    return str(int(dt.datetime.now(dt.UTC).timestamp() * 1000)) + "".join(
         secrets.choice(alphabet) for _ in range(32)
     )
 
@@ -79,7 +79,7 @@ def fetch_transfer_url(config: dict, timeout: int = 20) -> str:
     body = json.dumps(
         {"data": config["request"]}, separators=(",", ":"), ensure_ascii=False
     ).encode()
-    date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    date = dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     nonce = _new_nonce()
     signing = {
         **rest,
@@ -161,7 +161,7 @@ def build_play_request(config: dict, transfer_url: str) -> bytes:
             lines[index] = f"x-pcs-request-id: {secrets.token_hex(8)}"
 
     nonce = secrets.token_hex(16)
-    created = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    created = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ")
     digest = base64.b64encode(
         hmac.new(
             bytes.fromhex(stream["transfer_hmac_key_hex"]),
@@ -204,7 +204,7 @@ def _build_generic_play_request(stream: dict, transfer_url: str) -> bytes:
     )
 
     nonce = secrets.token_hex(16)
-    created = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    created = dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     effective_key = stream.get("wsse_key") or stream["device_sn"]
     credential_material = (
         stream["username"]
