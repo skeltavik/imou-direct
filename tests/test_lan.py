@@ -58,7 +58,7 @@ def _config() -> dict:
 class LanTests(unittest.TestCase):
     def test_local_channel_request_has_fresh_valid_authentication(self) -> None:
         lan = _config()
-        moment = dt.datetime(2026, 7, 20, 12, 34, 56, tzinfo=dt.timezone.utc)
+        moment = dt.datetime(2026, 7, 20, 12, 34, 56, tzinfo=dt.UTC)
         request = _LAN.build_local_channel_request(
             lan,
             now=moment,
