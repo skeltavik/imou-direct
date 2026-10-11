@@ -30,7 +30,7 @@
     "vitest": "3.2.7"
   },
   "overrides": {
-    "adm-zip": "0.6.0",
+    "adm-zip": "0.6.1",
     "serialize-javascript": "7.1.0"
   }
 }
