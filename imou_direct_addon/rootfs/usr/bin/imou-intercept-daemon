@@ -1,0 +1,379 @@
+#!/usr/bin/env python3
+"""Local intercept daemon prototype for the Imou Chime upload stream.
+
+Research prototype, not production-hardened. Reads the Chime's proprietary
+upload framing (TCP :9112) from a local capture socket, reassembles the
+dollar-prefixed interleaved packets, recovers DHAV frames, decrypts them with
+the device frame key, and serves Annex-B HEVC NAL units to loopback clients
+(Home Assistant intercept candidate, Scrypted media transport) over a
+length-prefixed TCP protocol: 4-byte big-endian length + Annex-B unit.
+
+Fail-open by design: this daemon never touches the Chime or the network. A
+separate, operator-controlled capture path (port mirror, policy route) feeds
+it; if this daemon stops, the Chime's own cloud path is unaffected.
+
+Usage:
+    imou_intercept_daemon.py --config <bootstrap.json> --listen 127.0.0.1 --port 49511
+    # feed: <capture of chime:9112 TCP payloads, reassembled> piped to stdin with
+    #   4-byte big-endian chunk lengths, or --pcap <file> for offline replay.
+
+Only loopback listen addresses are accepted.
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import ipaddress
+import json
+import queue
+import socket
+import struct
+import sys
+import threading
+from pathlib import Path
+from typing import BinaryIO, Iterator
+
+def _load_core_file(path: Path):
+    spec = importlib.util.spec_from_file_location("imou_intercept_core", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load core transport module")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_core(component: Path):
+    try:
+        return _load_core_file(component / "core.py")
+    except (OSError, RuntimeError):
+        bundled = Path("/usr/bin/imou-intercept-core.py")
+        return _load_core_file(bundled)
+
+
+class AnnexBHub:
+    """Fan out Annex-B units to loopback subscribers via per-client queues."""
+
+    def __init__(self, *, replay_window: int = 256, queue_size: int = 512) -> None:
+        self._lock = threading.Lock()
+        self._queues: list[queue.Queue[bytes | None]] = []
+        self._replay: list[bytes] = []
+        self._replay_window = replay_window
+        self._queue_size = queue_size
+        self._closed = False
+
+    def publish(self, unit: bytes) -> None:
+        with self._lock:
+            self._replay.append(unit)
+            del self._replay[: -self._replay_window]
+            queues = list(self._queues)
+        for subscriber in queues:
+            try:
+                subscriber.put_nowait(unit)
+            except queue.Full:
+                try:
+                    subscriber.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    subscriber.put_nowait(unit)
+                except queue.Full:
+                    pass
+
+    def session_end(self) -> None:
+        with self._lock:
+            self._closed = True
+            queues = list(self._queues)
+        for subscriber in queues:
+            try:
+                subscriber.put_nowait(None)
+            except queue.Full:
+                pass
+
+    def subscribe(self) -> queue.Queue[bytes | None]:
+        subscriber: queue.Queue[bytes | None] = queue.Queue(
+            maxsize=self._queue_size
+        )
+        with self._lock:
+            for unit in self._replay:
+                try:
+                    subscriber.put_nowait(unit)
+                except queue.Full:
+                    break
+            if self._closed:
+                try:
+                    subscriber.put_nowait(None)
+                except queue.Full:
+                    pass
+            else:
+                self._queues.append(subscriber)
+        return subscriber
+
+    def unsubscribe(self, subscriber: queue.Queue[bytes | None]) -> None:
+        with self._lock:
+            if subscriber in self._queues:
+                self._queues.remove(subscriber)
+
+
+def extract_units(core, frame_key: bytes, chunks: Iterator[bytes]) -> Iterator[bytes]:
+    """Feed raw upload bytes through the shared extractor, yield Annex-B."""
+    extractor = core.HevcExtractor(frame_key)
+    for chunk in chunks:
+        for frame in extractor.feed(chunk):
+            yield b"\x00\x00\x00\x01" + frame
+
+
+def length_prefixed(source: BinaryIO) -> Iterator[bytes]:
+    """Yield chunks from a 4-byte big-endian length-prefixed byte stream."""
+    while True:
+        header = source.read(4)
+        if not header:
+            return
+        if len(header) != 4:
+            raise RuntimeError("truncated chunk header")
+        (size,) = struct.unpack(">I", header)
+        if size == 0 or size > 8 * 1024 * 1024:
+            raise RuntimeError("invalid chunk size")
+        payload = source.read(size)
+        if len(payload) != size:
+            raise RuntimeError("truncated chunk payload")
+        yield payload
+
+
+def serve(hub: AnnexBHub, host: str, port: int, stop: threading.Event) -> None:
+    """Serve length-prefixed Annex-B units to loopback clients."""
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind((host, port))
+    server.listen(8)
+    server.settimeout(1.0)
+    with server:
+        while not stop.is_set():
+            try:
+                connection, peer = server.accept()
+            except socket.timeout:
+                continue
+            if ipaddress.ip_address(peer[0]).is_loopback is False:
+                connection.close()
+                continue
+            thread = threading.Thread(
+                target=_serve_client, args=(hub, connection, stop), daemon=True
+            )
+            thread.start()
+
+
+def _serve_client(hub: AnnexBHub, connection: socket.socket, stop: threading.Event) -> None:
+    subscriber = hub.subscribe()
+    try:
+        with connection:
+            while not stop.is_set():
+                try:
+                    unit = subscriber.get(timeout=1.0)
+                except queue.Empty:
+                    continue
+                if unit is None:
+                    return
+                try:
+                    connection.sendall(struct.pack(">I", len(unit)) + unit)
+                except OSError:
+                    return
+    finally:
+        hub.unsubscribe(subscriber)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", type=Path, default=None)
+    parser.add_argument("--frame-key-hex", default=None)
+    parser.add_argument("--chime", default=None)
+    parser.add_argument("--upload-port", type=int, default=9112)
+    parser.add_argument("--mode", choices=("mirror", "arp", "stdin", "pcap"), default=None)
+    parser.add_argument("--listen", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=49511)
+    parser.add_argument("--pcap", type=Path, default=None)
+    args = parser.parse_args()
+
+    if args.mode is None:
+        args.mode = "pcap" if args.pcap is not None else "stdin"
+    if args.mode == "pcap" and args.pcap is None:
+        print("pcap mode needs --pcap <file>", file=sys.stderr)
+        return 2
+    if args.mode in ("mirror", "arp"):
+        if not args.chime:
+            print("live capture needs --chime <lan-address>", file=sys.stderr)
+            return 2
+        try:
+            ipaddress.ip_address(args.chime)
+        except ValueError:
+            print("chime address is invalid", file=sys.stderr)
+            return 2
+
+    try:
+        listen_ip = ipaddress.ip_address(args.listen)
+    except ValueError:
+        print("listen address is invalid", file=sys.stderr)
+        return 2
+    allow_lan = args.frame_key_hex is not None
+    if not listen_ip.is_loopback and not allow_lan:
+        print("refusing non-loopback listen address", file=sys.stderr)
+        return 2
+    if not 1 <= args.port <= 65_535:
+        print("port is invalid", file=sys.stderr)
+        return 2
+
+    root = Path(__file__).resolve().parents[1]
+    core = _load_core(root / "custom_components" / "imou_direct")
+    if args.frame_key_hex is not None:
+        try:
+            frame_key = bytes.fromhex(args.frame_key_hex)
+        except ValueError:
+            print("frame key is invalid", file=sys.stderr)
+            return 2
+        if len(frame_key) != 32:
+            print("frame key is invalid", file=sys.stderr)
+            return 2
+    elif args.config is not None:
+        config = json.loads(args.config.read_text(encoding="utf-8"))
+        frame_key = core.derive_frame_key(config)
+    else:
+        print("need --frame-key-hex or --config", file=sys.stderr)
+        return 2
+
+    hub = AnnexBHub()
+    stop = threading.Event()
+    server_thread = threading.Thread(
+        target=serve, args=(hub, args.listen, args.port, stop), daemon=True
+    )
+    server_thread.start()
+    print(f"listening on {args.listen}:{args.port}", flush=True)
+
+    try:
+        if args.mode == "pcap":
+            assert args.pcap is not None
+            chunks = _pcap_upload_chunks(
+                args.pcap, source=args.chime, port=args.upload_port
+            )
+        elif args.mode == "stdin":
+            chunks = length_prefixed(sys.stdin.buffer)
+        elif args.mode in ("mirror", "arp"):
+            chunks = _live_upload_chunks(args.chime, args.upload_port, args.mode)
+        else:
+            raise AssertionError("unknown capture mode")
+        for unit in extract_units(core, frame_key, chunks):
+            hub.publish(unit)
+    except BrokenPipeError:
+        pass
+    except RuntimeError as error:
+        print(f"feed error: {type(error).__name__}", file=sys.stderr)
+        return 1
+    finally:
+        if args.mode == "pcap":
+            print("replay complete; serving... (Ctrl-C to stop)", flush=True)
+            try:
+                while True:
+                    stop.wait(3600)
+            except KeyboardInterrupt:
+                pass
+            finally:
+                hub.session_end()
+                stop.set()
+                server_thread.join(timeout=5)
+        else:
+            hub.session_end()
+            stop.set()
+            server_thread.join(timeout=5)
+    return 0
+
+
+def _live_upload_chunks(chime: str, upload_port: int, mode: str) -> Iterator[bytes]:
+    """Yield reassembled upload TCP payloads from a live capture feed."""
+    import subprocess
+
+    if mode == "mirror":
+        capture_filter = f"host {chime} and tcp port {upload_port}"
+    else:
+        capture_filter = f"host {chime} and tcp port {upload_port}"
+        print(
+            "arp mode needs operator-run spoofing; reading mirrored traffic",
+            flush=True,
+        )
+    proc = subprocess.Popen(
+        ["tshark", "-i", "any", "-f", capture_filter, "-T", "fields",
+         "-e", "tcp.seq", "-e", "tcp.payload", "-l"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    assert proc.stdout is not None
+    position: int | None = None
+    for line in proc.stdout:
+        fields = line.rstrip("\n").split("\t")
+        if len(fields) != 2 or not fields[1]:
+            continue
+        sequence = int(fields[0])
+        data = bytes.fromhex(fields[1].replace(":", ""))
+        if position is None:
+            position = sequence
+        if sequence < position:
+            skip = position - sequence
+            if skip < len(data):
+                yield data[skip:]
+                position = sequence + len(data)
+        elif sequence == position:
+            yield data
+            position += len(data)
+        # Gaps are skipped: the extractor resynchronizes on the next marker.
+
+
+def _pcap_upload_chunks(
+    pcap: Path, *, source: str | None = None, port: int = 9112
+) -> Iterator[bytes]:
+    """Replay reassembled Chime upload TCP payloads from a capture file."""
+    import subprocess
+
+    display = f"tcp.port=={port} && tcp.len>0"
+    if source is not None:
+        display = f"ip.src=={source} && {display}"
+    proc = subprocess.Popen(
+        [
+            "tshark",
+            "-r",
+            str(pcap),
+            "-Y",
+            display,
+            "-T",
+            "fields",
+            "-e",
+            "tcp.seq",
+            "-e",
+            "tcp.payload",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    assert proc.stdout is not None
+    segments: list[tuple[int, bytes]] = []
+    for line in proc.stdout:
+        fields = line.rstrip("\n").split("\t")
+        if len(fields) != 2 or not fields[1]:
+            continue
+        segments.append((int(fields[0]), bytes.fromhex(fields[1].replace(":", ""))))
+    proc.wait()
+    segments.sort()
+    position = 1
+    for sequence, data in segments:
+        if sequence < position:
+            skip = position - sequence
+            if skip < len(data):
+                yield data[skip:]
+                position = sequence + len(data)
+        elif sequence == position:
+            yield data
+            position += len(data)
+        # Gaps are skipped: the extractor resynchronizes on the next marker.
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,28 @@
+#!/usr/bin/with-contenv bashio
+# =============================================================================
+# Imou Intercept add-on service entrypoint.
+# Reads operator-provided options, derives nothing secret into logs, and
+# execs the bundled daemon in mirror mode by default.
+# =============================================================================
+
+CHIME_IP="$(bashio::config 'chime_ip')"
+UPLOAD_PORT="$(bashio::config 'upload_port')"
+LISTEN_PORT="$(bashio::config 'listen_port')"
+CAPTURE_MODE="$(bashio::config 'capture_mode')"
+FRAME_KEY_HEX="$(bashio::config 'frame_key_hex')"
+
+if [[ "${CAPTURE_MODE}" == "arp" ]]; then
+    bashio::log.warning "ARP capture mode intercepts LAN traffic; prefer mirror mode."
+fi
+
+if [[ -z "${FRAME_KEY_HEX}" ]]; then
+    bashio::exit.nok "frame_key_hex is required (32-byte device frame key as hex)"
+fi
+
+exec /usr/bin/imou-intercept-daemon \
+    --frame-key-hex "${FRAME_KEY_HEX}" \
+    --chime "${CHIME_IP}" \
+    --upload-port "${UPLOAD_PORT}" \
+    --listen 0.0.0.0 \
+    --port "${LISTEN_PORT}" \
+    --mode "${CAPTURE_MODE}"

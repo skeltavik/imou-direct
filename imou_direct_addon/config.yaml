@@ -1,0 +1,32 @@
+name: Imou Intercept
+description: Local tap for the Imou Chime upload stream (no cloud, no app)
+version: 0.1.0
+slug: imou_intercept
+init: false
+arch:
+  - aarch64
+  - amd64
+ports:
+  49511/tcp: 49511
+ports_description:
+  49511/tcp: Annex-B feed for the Imou Direct integration
+options:
+  chime_ip: ""
+  upload_port: 9112
+  listen_port: 49511
+  capture_mode: mirror
+  frame_key_hex: ""
+schema:
+  chime_ip: str
+  upload_port: port
+  listen_port: port
+  capture_mode: list(mirror|arp)
+  frame_key_hex: password
+privileged: []
+devices: []
+apparmor: true
+hassio_api: false
+homeassistant_api: false
+host_network: false
+boot: manual
+stage: experimental
