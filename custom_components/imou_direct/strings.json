@@ -21,7 +21,8 @@
           "name": "Camera name",
           "password": "Imou password",
           "transport_mode": "Stream transport",
-          "width": "Stream width"
+          "width": "Stream width",
+          "intercept_host": "Intercept daemon host"
         },
         "description": "Sign in once to discover your camera and choose local or cloud streaming. Your Imou account password is used only during this step and is not stored. The resulting device credentials remain inside Home Assistant.",
         "title": "Set up Imou Direct"
@@ -40,7 +41,8 @@
           "name": "Camera name",
           "password": "Imou password",
           "transport_mode": "Stream transport",
-          "width": "Stream width"
+          "width": "Stream width",
+          "intercept_host": "Intercept daemon host"
         },
         "description": "Sign in again to refresh this camera's private session and transport mode. Your Imou account and password are not stored.",
         "title": "Refresh Imou Direct"

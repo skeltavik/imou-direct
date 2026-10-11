@@ -13,6 +13,7 @@ CONF_BOOTSTRAP: Final = "bootstrap"
 CONF_COUNTRY: Final = "country"
 CONF_DEVICE_ID: Final = "device_id"
 CONF_FFMPEG_BIN: Final = "ffmpeg_bin"
+CONF_INTERCEPT_HOST: Final = "intercept_host"
 CONF_TRANSPORT_MODE: Final = "transport_mode"
 CONF_WIDTH: Final = "width"
 
@@ -22,6 +23,7 @@ DEFAULT_FFMPEG_BIN: Final = "ffmpeg"
 DEFAULT_NAME: Final = "Imou Doorbell"
 DEFAULT_TRANSPORT_MODE: Final = "local_first"
 DEFAULT_WIDTH: Final = 960
+DEFAULT_INTERCEPT_HOST: Final = "127.0.0.1"
 
 TRANSPORT_CLOUD_ONLY: Final = "cloud_only"
 TRANSPORT_LOCAL_FIRST: Final = "local_first"

@@ -198,6 +198,311 @@ def local_frame_key(lan: dict) -> bytes:
     """Derive the media frame key from the LAN stream credentials."""
     return derive_frame_key(_local_stream_config(lan))
 
+RTSP_PORT = 554
+RTSP_CHANNEL_MAIN = "/live/ch00_0"
+RTSP_CHANNEL_SUB = "/live/ch00_1"
+_RTSP_DIGEST_PARAM = re.compile(r'(\w+)=(?:\"([^\"]*)\"|([^,\\s]+))')
+
+
+def has_rtsps_config(config: dict) -> bool:
+    """Return whether a bootstrap has the minimal RTSPS stream secret set."""
+    lan = config.get("lan")
+    if not isinstance(lan, dict):
+        return False
+    if not isinstance(lan.get("discovery_address"), str) or not lan["discovery_address"]:
+        return False
+    return all(
+        isinstance(lan.get(key), str) and bool(lan[key])
+        for key in ("device_username", "device_password")
+    )
+
+
+def _rtsp_digest_fields(challenge: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for key, quoted, bare in _RTSP_DIGEST_PARAM.findall(challenge):
+        fields[key.lower()] = quoted or bare
+    return fields
+
+
+def rtsp_authorization(
+    challenge: str,
+    username: str,
+    password: str,
+    method: str,
+    uri: str,
+) -> str | None:
+    """Build a Digest Authorization header for the local RTSPS listener."""
+    if not challenge.lower().startswith("digest"):
+        return None
+    fields = _rtsp_digest_fields(challenge)
+    realm, nonce = fields.get("realm"), fields.get("nonce")
+    if not realm or not nonce:
+        return None
+    md5 = lambda value: hashlib.md5(value.encode("utf-8")).hexdigest()  # noqa: E731
+    cnonce = secrets.token_hex(8)
+    ha1 = md5(f"{username}:{realm}:{password}")
+    ha2 = md5(f"{method}:{uri}")
+    if "auth" in fields.get("qop", "").lower():
+        response = md5(f"{ha1}:{nonce}:00000001:{cnonce}:auth:{ha2}")
+        tail = f', qop=auth, nc=00000001, cnonce="{cnonce}"'
+    else:
+        response = md5(f"{ha1}:{nonce}:{ha2}")
+        tail = ""
+    opaque = f', opaque="{fields["opaque"]}"' if fields.get("opaque") else ""
+    return (
+        f'Digest username="{username}", realm="{realm}", nonce="{nonce}", '
+        f'uri="{uri}", response="{response}"{opaque}{tail}'
+    )
+
+
+def _rtsp_request(
+    tls: ssl.SSLSocket,
+    method: str,
+    uri: str,
+    cseq: int,
+    authorization: str | None = None,
+    extra: str = "",
+) -> tuple[str, dict[str, str], bytes]:
+    """Send one RTSP request and return its status line, headers, and body."""
+    lines = [f"{method} {uri} RTSP/1.0", f"CSeq: {cseq}"]
+    if method == "DESCRIBE":
+        lines.append("Accept: application/sdp")
+    if authorization:
+        lines.append(f"Authorization: {authorization}")
+    if extra:
+        lines.append(extra)
+    tls.sendall(("\r\n".join(lines) + "\r\n\r\n").encode("ascii"))
+    data = bytearray()
+    while b"\r\n\r\n" not in data:
+        chunk = tls.recv(8192)
+        if not chunk:
+            raise LanP2PError("RTSPS response ended unexpectedly")
+        data.extend(chunk)
+        if len(data) > MAX_PLAY_HEADER + MAX_PLAY_BODY:
+            raise LanP2PError("RTSPS response is too large")
+    head, _, body = bytes(data).partition(b"\r\n\r\n")
+    status = head.split(b"\r\n", 1)[0].decode("latin-1", "replace")
+    headers: dict[str, str] = {}
+    for line in head.split(b"\r\n")[1:]:
+        name, separator, value = line.partition(b":")
+        if separator:
+            headers[name.strip().lower().decode("ascii", "replace")] = value.strip().decode(
+                "latin-1", "replace"
+            )
+    length = 0
+    if "content-length" in headers:
+        try:
+            length = int(headers["content-length"])
+        except ValueError as error:
+            raise LanP2PError("invalid RTSPS response length") from error
+        if not 0 <= length <= MAX_PLAY_BODY:
+            raise LanP2PError("invalid RTSPS response length")
+    while len(body) < length:
+        chunk = tls.recv(8192)
+        if not chunk:
+            raise LanP2PError("RTSPS response ended unexpectedly")
+        body += chunk
+    return status, headers, body
+
+
+def _rtsp_challenge(headers: dict[str, str]) -> str:
+    challenge = headers.get("www-authenticate", "")
+    return challenge.split(":", 1)[1].strip() if ":" in challenge else challenge
+
+
+class RtspsTransport:
+    """Stream local HEVC video over RTSPS from the LAN device listener."""
+
+    def __init__(self, config: dict, *, timeout: float = 15.0) -> None:
+        lan = config.get("lan")
+        if not isinstance(lan, dict):
+            raise LanP2PError("LAN configuration is missing")
+        self._lan = dict(lan)
+        self._timeout = timeout
+
+    @property
+    def _target(self) -> tuple[str, int]:
+        address = str(self._lan.get("discovery_address") or "")
+        if not address:
+            raise LanP2PError("LAN discovery address is missing")
+        port = int(self._lan.get("rtsp_port") or RTSP_PORT)
+        if not 1 <= port <= 65_535:
+            raise LanP2PError("invalid LAN media port")
+        return address, port
+
+    def _credentials(self) -> tuple[str, str]:
+        return (
+            _required_text(self._lan, "device_username"),
+            _required_text(self._lan, "device_password"),
+        )
+
+    def _channel(self) -> str:
+        channel = str(self._lan.get("rtsp_channel") or RTSP_CHANNEL_MAIN)
+        if not channel.startswith("/") or " " in channel or "\r" in channel or "\n" in channel:
+            raise LanP2PError("invalid LAN media channel")
+        return channel
+
+    def _connect(self) -> ssl.SSLSocket:
+        address, port = self._target
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.set_ciphers("ALL:@SECLEVEL=0")
+        try:
+            raw = socket.create_connection((address, port), timeout=self._timeout)
+            raw.settimeout(self._timeout)
+            tls = context.wrap_socket(raw, server_hostname=address)
+        except (OSError, ssl.SSLError) as error:
+            raise LanP2PError("LAN RTSPS connection failed") from error
+        tls.settimeout(self._timeout)
+        return tls
+
+    def stream(self, stop=None) -> Iterator[bytes]:
+        """Yield Annex-B HEVC NAL units from the local RTSPS video track."""
+        username, password = self._credentials()
+        channel = self._channel()
+        address, port = self._target
+        base = f"rtsp://{address}:{port}{channel}"
+        tls = self._connect()
+        try:
+            status, headers, _body = _rtsp_request(tls, "OPTIONS", base, 1)
+            if " 401 " not in status or "www-authenticate" not in headers:
+                raise LanP2PError("RTSPS challenge was not offered")
+            challenge = _rtsp_challenge(headers)
+            describe_auth = rtsp_authorization(challenge, username, password, "DESCRIBE", base)
+            if describe_auth is None:
+                raise LanP2PError("RTSPS challenge is unsupported")
+            status, _headers, _body = _rtsp_request(
+                tls, "DESCRIBE", base, 2, describe_auth, "Accept: application/sdp"
+            )
+            if " 200 " not in status:
+                raise LanP2PError("RTSPS media description was rejected")
+            session = ""
+            for track in (0, 1):
+                track_uri = f"{base}/trackID={track}"
+                setup_auth = rtsp_authorization(challenge, username, password, "SETUP", track_uri)
+                if setup_auth is None:
+                    raise LanP2PError("RTSPS challenge is unsupported")
+                status, setup_headers, _body = _rtsp_request(
+                    tls,
+                    "SETUP",
+                    track_uri,
+                    3 + track,
+                    setup_auth,
+                    f"Transport: RTP/AVP/TCP;unicast;interleaved={2 * track}-{2 * track + 1}",
+                )
+                if " 200 " not in status:
+                    raise LanP2PError("RTSPS transport setup was rejected")
+                if track == 0:
+                    session = setup_headers.get("session", "").split(";")[0].strip()
+            extra = f"Session: {session}\r\nRange: npt=0.000-" if session else ""
+            status, _headers, _body = _rtsp_request(tls, "PLAY", base, 5, None, extra)
+            if " 200 " not in status:
+                raise LanP2PError("RTSPS playback was rejected")
+            yield from self._annex_b(tls, stop)
+        except (OSError, ssl.SSLError) as error:
+            raise LanP2PError("LAN RTSPS transport failed") from error
+        finally:
+            tls.close()
+
+    def _annex_b(self, tls: ssl.SSLSocket, stop) -> Iterator[bytes]:
+        """Reassemble FU fragmentation units into Annex-B NAL units."""
+        pending = bytearray()
+        fragment: bytearray | None = None
+        param_sets: list[bytes] = []
+        param_seen: set[int] = set()
+        while stop is None or not stop.is_set():
+            try:
+                chunk = tls.recv(MAX_DATAGRAM)
+            except socket.timeout as error:
+                raise LanP2PError("LAN stream timed out") from error
+            if not chunk:
+                raise LanP2PError("LAN stream ended")
+            pending.extend(chunk)
+            for unit in self._drain(pending):
+                if unit is None:
+                    continue
+                nal_type = unit[0] >> 1
+                if nal_type in (32, 33, 34):
+                    if nal_type not in param_seen:
+                        param_seen.add(nal_type)
+                        param_sets.append(unit)
+                        yield b"\x00\x00\x00\x01" + unit
+                elif nal_type == 49:
+                    assembled = self._fragment(unit, fragment)
+                    fragment = assembled[1]
+                    if assembled[0] is not None:
+                        yield b"\x00\x00\x00\x01" + assembled[0]
+                else:
+                    yield b"\x00\x00\x00\x01" + unit
+
+    @staticmethod
+    def _fragment(
+        unit: bytes, fragment: bytearray | None
+    ) -> tuple[bytes | None, bytearray | None]:
+        """Fold one FU payload into its reassembly buffer."""
+        if len(unit) < 3:
+            return None, fragment
+        start, end, fragment_type = (
+            bool(unit[2] & 0x80),
+            bool(unit[2] & 0x40),
+            unit[2] & 0x3F,
+        )
+        if start:
+            fragment = bytearray(bytes([(unit[0] & 0x81) | (fragment_type << 1), unit[1]]))
+        if fragment is None:
+            return None, None
+        fragment.extend(unit[3:])
+        if end:
+            return bytes(fragment), None
+        return None, fragment
+
+    def _drain(self, pending: bytearray) -> Iterator[bytes | None]:
+        """Yield complete video RTP payloads from the interleaved buffer."""
+        while len(pending) >= 4:
+            if pending[0] != 0x24:
+                marker = pending.find(b"$")
+                if marker < 0:
+                    pending.clear()
+                    return
+                del pending[:marker]
+                if len(pending) < 4:
+                    return
+            size = int.from_bytes(pending[2:4], "big")
+            if size <= 0 or size > MAX_DATAGRAM:
+                del pending[0]
+                continue
+            if len(pending) < 4 + size:
+                return
+            channel = pending[1]
+            packet = bytes(pending[4 : 4 + size])
+            del pending[: 4 + size]
+            if channel != 0:
+                continue
+            parsed = self._rtp_payload(packet)
+            yield parsed
+
+    @staticmethod
+    def _rtp_payload(packet: bytes) -> bytes | None:
+        """Strip the RTP header and return video payload type 98 bytes."""
+        if len(packet) < 12 or packet[0] >> 6 != 2 or packet[1] & 0x7F != 98:
+            return None
+        offset = 12 + 4 * (packet[0] & 0x0F)
+        if packet[0] & 0x10:
+            if len(packet) < offset + 4:
+                return None
+            offset += 4 + 4 * int.from_bytes(packet[offset + 2 : offset + 4], "big")
+        end = len(packet)
+        if packet[0] & 0x20:
+            padding = packet[-1]
+            if not padding or padding > end - offset:
+                return None
+            end -= padding
+        if offset >= end:
+            return None
+        return packet[offset:end]
+
 
 def _ptcp_payload(realm: int, data: bytes) -> bytes:
     return (
@@ -577,4 +882,89 @@ class LanP2PTransport:
                     send_body(_ptcp_status(realm, b"DISC"))
                 except (OSError, LanP2PError):
                     pass
+            sock.close()
+
+
+INTERCEPT_HOST = "127.0.0.1"
+INTERCEPT_PORT = 49511
+_ANNEX_B_PREFIX = b"\x00\x00\x00\x01"
+_MAX_NAL = 8 * 1024 * 1024
+
+
+def has_intercept_config(config: dict) -> bool:
+    """Return whether an intercept daemon endpoint is configured."""
+    lan = config.get("lan")
+    if not isinstance(lan, dict):
+        return False
+    if lan.get("intercept") is False:
+        return False
+    host = lan.get("intercept_host") or INTERCEPT_HOST
+    port = lan.get("intercept_port") or INTERCEPT_PORT
+    if not isinstance(host, str) or not host or "\r" in host or "\n" in host:
+        return False
+    try:
+        port_number = int(port)
+    except (TypeError, ValueError):
+        return False
+    return 1 <= port_number <= 65_535
+
+
+class InterceptTransport:
+    """Yield Annex-B NAL units from a loopback intercept daemon."""
+
+    def __init__(self, config: dict, *, timeout: float = 15.0) -> None:
+        lan = config.get("lan")
+        if not isinstance(lan, dict):
+            raise LanP2PError("LAN configuration is missing")
+        host = lan.get("intercept_host")
+        host = str(host) if host is not None else INTERCEPT_HOST
+        raw_port = lan.get("intercept_port")
+        raw_port = raw_port if raw_port is not None else INTERCEPT_PORT
+        try:
+            port = int(raw_port)
+        except (TypeError, ValueError) as error:
+            raise LanP2PError("invalid intercept endpoint") from error
+        if not host or "\r" in host or "\n" in host or not 1 <= port <= 65_535:
+            raise LanP2PError("invalid intercept endpoint")
+        self._host = host
+        self._port = port
+        self._timeout = timeout
+
+    def stream(self, stop=None) -> Iterator[bytes]:
+        """Yield one Annex-B NAL unit per length-prefixed daemon frame."""
+        try:
+            sock = socket.create_connection(
+                (self._host, self._port), timeout=self._timeout
+            )
+            sock.settimeout(self._timeout)
+        except OSError as error:
+            raise LanP2PError("intercept daemon is unreachable") from error
+        pending = bytearray()
+        try:
+            while stop is None or not stop.is_set():
+                try:
+                    chunk = sock.recv(MAX_DATAGRAM)
+                except socket.timeout as error:
+                    raise LanP2PError("LAN stream timed out") from error
+                if not chunk:
+                    if pending:
+                        raise LanP2PError("LAN stream ended")
+                    return
+                pending.extend(chunk)
+                if len(pending) > _MAX_NAL + 4:
+                    raise LanP2PError("intercept frame is too large")
+                while len(pending) >= 4:
+                    size = int.from_bytes(pending[:4], "big")
+                    if size <= 0 or size > _MAX_NAL:
+                        raise LanP2PError("intercept frame is too large")
+                    if len(pending) < 4 + size:
+                        break
+                    unit = bytes(pending[4 : 4 + size])
+                    del pending[: 4 + size]
+                    if not unit.startswith(_ANNEX_B_PREFIX):
+                        raise LanP2PError("intercept frame is not Annex-B")
+                    yield unit
+        except OSError as error:
+            raise LanP2PError("intercept transport failed") from error
+        finally:
             sock.close()

@@ -22,6 +22,7 @@ CONTENT_TYPE = _CLOUD.CONTENT_TYPE
 ImouCloudClient = _CLOUD.ImouCloudClient
 _canonical = _CLOUD._canonical
 build_client_ua = _CLOUD.build_client_ua
+normalise_api_host = _CLOUD.normalise_api_host
 
 
 class _Response:
@@ -40,6 +41,29 @@ class _Response:
 
 
 class CloudTests(unittest.TestCase):
+    def test_api_host_requires_approved_https_origin(self) -> None:
+        self.assertEqual(
+            normalise_api_host("entry.easy4ipcloud.com:443"),
+            "https://entry.easy4ipcloud.com:443",
+        )
+        self.assertEqual(
+            normalise_api_host("https://EU.easy4ipcloud.com"),
+            "https://eu.easy4ipcloud.com",
+        )
+
+        for value in (
+            "http://entry.easy4ipcloud.com",
+            "https://attacker.example",
+            "https://127.0.0.1",
+            "https://user@entry.easy4ipcloud.com",
+            "https://entry.easy4ipcloud.com:8443",
+            "https://entry.easy4ipcloud.com/path",
+        ):
+            with self.subTest(value=value), self.assertRaises(
+                _CLOUD.ImouProtocolError
+            ):
+                normalise_api_host(value)
+
     def test_client_ua_contains_no_account_data(self) -> None:
         encoded = build_client_ua(
             "terminal", country="BE", language="nl_BE", timezone_offset=3600
@@ -88,7 +112,7 @@ class CloudTests(unittest.TestCase):
                         "token": "session-token",
                         "sessionId": "session-id",
                         "userId": 123,
-                        "entryUrlV2": "entry.example:443",
+                        "entryUrlV2": "entry.easy4ipcloud.com:443",
                     },
                 },
                 {

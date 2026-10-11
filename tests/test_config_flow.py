@@ -258,6 +258,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["data"]["bootstrap"], bootstrap)
         self.assertEqual(result["data"]["country"], "BE")
         self.assertEqual(result["data"]["transport_mode"], "local_first")
+        self.assertEqual(result["data"]["intercept_host"], "127.0.0.1")
         self.assertNotIn("ffmpeg_bin", result["data"])
         self.assertEqual(discovered_with[0][2], "BE")
         self.assertEqual(validated_ffmpeg, ["ffmpeg"])
