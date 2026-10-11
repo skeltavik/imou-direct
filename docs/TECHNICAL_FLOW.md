@@ -14,10 +14,11 @@ are included only where they are needed to explain interoperability.
 The current implementation supports an Imou Doorbell 3 paired with its Chime.
 It has three runtime transport modes:
 
-- `local_first`: try the recovered LAN P2P path, then use the cloud transfer
-  path if the LAN attempt fails or produces no decodable video;
-- `local_only`: use the LAN path and never request an Imou media-transfer URL at
-  runtime; and
+- `local_first`: try the recovered LAN RTSPS path, then the legacy LAN P2P
+  path, then use the cloud transfer path if the LAN attempts fail or produce
+  no decodable video;
+- `local_only`: use the LAN paths and never request an Imou media-transfer URL
+  at runtime; and
 - `cloud_only`: always request a temporary Imou media-transfer URL.
 
 Initial setup and **Reconfigure** are not offline. They sign in directly to
@@ -40,14 +41,16 @@ flowchart TD
     DISCOVER --> BOOT["Password-free private bootstrap"]
     BOOT --> MODE{"Runtime transport mode"}
 
-    MODE -->|"local_only or local_first"| LAN["LAN discovery and PTCP tunnel"]
+    MODE -->|"local_only or local_first"| RTSPS["LAN RTSPS live channels"]
     MODE -->|"cloud_only"| CLOUD["Signed temporary transfer request"]
-    LAN -->|"local_first failure"| CLOUD
+    RTSPS -->|"local_first failure"| P2P["Legacy LAN P2P tunnel"]
+    P2P -->|"local_first failure"| CLOUD
 
-    LAN --> PLAY["Fresh TLS/WSSE PLAY"]
+    RTSPS --> WIRE["Interleaved RTP / Annex-B HEVC byte stream"]
+    P2P --> PLAY["Fresh TLS/WSSE PLAY"]
     CLOUD --> PLAY
-    PLAY --> WIRE["Interleaved RTP / DHAV byte stream"]
-    WIRE --> EXTRACT["Incremental framing and HEVC decryption"]
+    PLAY --> WIRE
+    WIRE --> EXTRACT["Incremental framing and HEVC recovery"]
     EXTRACT --> FFMPEG["FFmpeg: HEVC to H.264 HLS and JPEG"]
     FFMPEG --> LOOPBACK["Ephemeral 127.0.0.1 HTTP server"]
     LOOPBACK --> CAMERA["Authenticated Home Assistant camera proxy"]
@@ -130,8 +133,12 @@ independently:
 - LAN discovery, PTCP sequencing, realm binding, and TLS-over-PTCP; and
 - transport selection, fallback, transcoding, loopback serving, and cleanup.
 
-The result is a Python Home Assistant custom integration. No APK, Android VM,
-JNI library, Android relay, or vendor native library is used at runtime.
+The currently implemented result is a Python Home Assistant custom
+integration. No APK, Android VM, JNI library, Android relay, or vendor native
+library is used at runtime. The same recovered protocol is also intended to
+serve an independent native Scrypted doorbell plugin; Scrypted is not routed
+through Home Assistant and remains evidence-gated while its live media, event,
+and intercom transports are completed.
 
 ## Phase A: setup and private bootstrap
 
@@ -180,6 +187,12 @@ If the service answers once with HTTP 412 and a server date, the client repeats
 the request exactly once using that date. This handles clock disagreement
 without creating an unbounded retry loop.
 
+Regional API hosts returned by PCS are accepted only as HTTPS origins under the
+validated Imou `easy4ipcloud.com` namespace. Userinfo, paths, unexpected ports,
+other domains, plaintext HTTP, and redirects are rejected before
+session-authenticated requests are sent. Persisted legacy hosts are revalidated
+before runtime transfer acquisition.
+
 ### A3. Device discovery and child/main-device mapping
 
 `device.list.DeviceBasicInfoQueryV2` is requested with `needNewSecret=true`.
@@ -225,8 +238,8 @@ The background worker constructs a fresh candidate list for every connection
 attempt:
 
 ```text
-local_only  -> local
-local_first -> local, then cloud
+local_only  -> intercept, rtsps, local
+local_first -> intercept, rtsps, local, then cloud
 cloud_only  -> cloud
 ```
 
@@ -235,10 +248,41 @@ uses the cloud candidate until **Reconfigure** refreshes the bootstrap. In
 `local_only`, missing LAN data is an error and cannot silently become a cloud
 call.
 
-Local fallback is triggered not only by connection errors. If the LAN
-transport returns bytes but no complete video frame is decoded within the
-bounded frame timeout, it is treated as failed. This prevents a half-open P2P
-session from blocking `local_first` forever.
+Local fallback is triggered not only by connection errors. If a LAN transport
+returns bytes but no complete video frame is decoded within the bounded frame
+timeout, it is treated as failed. This prevents a half-open session from
+blocking `local_first` forever.
+
+## Phase B2: intercept daemon transport
+
+When the doorbell is awake, the Chime pushes live video upstream to the vendor
+server over TCP port 9112 using a custom binary framing (dollar-prefixed
+interleaved packets carrying RTP type 98 with DHAV frames, decrypted with the
+same device frame key as the cloud path). The prototype
+`tools/imou_intercept_daemon.py` taps this stream from an operator-controlled
+capture path (port mirror or policy route; ARP-spoof validated the framing),
+reassembles and decrypts it with the shared `HevcExtractor`, and serves
+Annex-B HEVC NAL units to loopback clients over a length-prefixed TCP
+protocol (4-byte big-endian length + unit, default `127.0.0.1:49511`).
+`InterceptTransport` in `lan.py` is the manager-side reader and the first
+`local_only`/`local_first` candidate. The daemon only listens on loopback,
+never touches the Chime or the network, and fails open: if it stops, the
+Chime's own cloud path is unaffected and the manager falls back to RTSPS,
+P2P, or cloud. Configure `lan.intercept_host`/`lan.intercept_port`, or set
+`lan.intercept` to `false` to disable the candidate.
+
+## Phase C0: local RTSPS transport
+
+The RTSPS transport connects directly to the LAN RTSPS listener (default TCP
+port 554) over TLS 1.2 and negotiates with digest authentication derived from
+the stored device credentials. Every nonce is fresh per connection. The
+sequence is `OPTIONS` (challenge), authenticated `DESCRIBE` (SDP with H.265
+video and AAC audio tracks), authenticated `SETUP` for both tracks on one
+connection (the device rejects `SETUP` on a connection without a prior
+`DESCRIBE`), and `PLAY`. Video arrives as interleaved RTP type 98; the
+transport reassembles RFC 7798 fragmentation units and yields Annex-B HEVC NAL
+units, which FFmpeg consumes directly without the DHAV/decryption stage. The
+`live/ch00_0` channel carries the main stream and `live/ch00_1` the substream.
 
 ## Phase C: local LAN P2P transport
 
@@ -316,6 +360,13 @@ device/media TLS hop. The tested endpoint presents a vendor/device certificate
 that is unsuitable for normal public PKI validation. PCS account and transfer
 API HTTPS requests retain normal verification.
 
+No replacement certificate pin, vendor trust anchor, or secret-bound server
+proof has yet been recovered. The TLS layer therefore encrypts the hop but does
+not prove the peer's identity. LAN mode assumes a trusted camera network until
+an interoperable server-authentication mechanism is verified. The broadcast
+challenge also exposes an offline verifier for weak device-media passwords;
+actual vendor credential entropy remains unverified.
+
 ### C4. Bound-child DHHTTP resource
 
 The local media target is a loopback-style DHHTTP resource from the vendor
@@ -332,6 +383,64 @@ Depending on the media capability, the implementation selects the recovered
 visual-talk or real-monitor `.xav` resource. The loopback host in this URL is a
 protocol value inside the P2P tunnel; it is not an HTTP server exposed by Home
 Assistant.
+
+### C5. Vendor loopback proxy and talkback contract
+
+Static analysis of the app's actual player path explains why generic DVRIP
+`OPMonitor` and NetSDK `RealPlay` attempts are not equivalent to the working
+app flow. The app asks its native login manager for an ephemeral P2P port using
+the main-device identity and bound-child PID. The native SDK creates a
+phone-local proxy, after which the media layer addresses
+`127.0.0.1:<ephemeral-port>` with one of these resource families:
+
+```text
+RTSP live view:  /cam/realmonitor?...&proto=Private3
+DHHTTP live:     /live/realmonitor.xav?...&proto=Private3
+visual talk:     /live/visualtalk.xav?...&talktype=...&proto=Private3
+audio talk:      /live/talk.xav?...&talktype=...&proto=Private3
+```
+
+The P2P-port request marks talk sessions separately (`isTalk=true`). The
+native talker is then created with the selected URL and starts a bounded talk
+session. Its Java-side setup selects G.711 A-law, 8 kHz, 16-bit source samples,
+and DHAV packet mode for the RTSP and DHHTTP branches. A separate media-push
+entry point accepts encoded audio chunks.
+
+These static facts define the next interoperable implementation boundary, but
+do not by themselves prove packet framing, pacing, or audible device output.
+Home Assistant and Scrypted two-way audio must remain disabled until an
+explicitly authorized live test validates those properties plus repeated
+start/stop and cleanup behavior.
+
+The app's live source selector also carries a `forceMts` decision. When false,
+it first requests a local P2P proxy port and returns immediately if that
+succeeds; otherwise it falls through to temporary vendor transfer acquisition.
+When true, it skips the P2P task entirely. In one bounded current runtime
+observation, a fresh Doorbell Live action entered with `forceMts=true`, skipped
+P2P, and obtained a non-empty vendor transfer result. That observation explains
+the app session used for runtime comparison, but it does not establish that all
+device states or source types force vendor transfer.
+
+An upstream static and passive-runtime provenance check further resolved this
+specific decision. The live-source builder sets `forceMts` when either its
+local `isForceMts` preference is enabled or the source channel-reference list
+contains the `Dormant` capability category. During one fresh authorized Live
+start, the preference read false, the capability check returned true, and the
+builder consequently set `forceMts=true`; the selector then made no P2P attempt
+and used vendor transfer. `Dormant` here is a source capability/category, not
+proof that the charged doorbell was asleep at that moment.
+
+This explains the observed official-app policy without proving that a local
+route is impossible. A later bounded research-only forced-false experiment
+entered the stock P2P branch, but its child-targeted request returned no local
+proxy port and fell back to MTS. Historical evidence shows that the one
+successful native LAN run requested P2P for the related main-device record and
+then selected the camera feed as channel 2. Repeating that main-device request
+with a fresh official-app registration currently returns the native
+`P2PChannelDeviceOffline` state even while MTS video is active. This unsupported
+override and the historical success do not justify production LAN behavior.
+Fresh non-empty local bytes and decoded frames remain mandatory before either
+Home Assistant or Scrypted enables the corresponding interface.
 
 ## Phase D: cloud transfer transport
 
@@ -368,6 +477,10 @@ compatibility depends on details that look cosmetic:
 The integration accepts either `Private-Length` or `Content-Length` on a
 successful response, consumes that private body incrementally, and sends only
 the remaining bytes to the media parser.
+
+Cloud `PLAY` parsing rejects headers above 64 KiB, private bodies above 1 MiB,
+negative or malformed lengths, and responses that exceed the absolute
+handshake deadline. These bounds match the already bounded LAN response path.
 
 Legacy v0.1 bootstraps can still contain a captured-template representation,
 but newly discovered and reconfigured devices use the capture-free builder.

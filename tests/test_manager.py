@@ -77,6 +77,12 @@ class ManagerTransportTests(unittest.TestCase):
         local_chunks: list[bytes] | None = None,
         local_error: bool = False,
         lan_config: bool = True,
+        rtsps_chunks: list[bytes] | None = None,
+        rtsps_error: bool = False,
+        rtsps_config: bool = True,
+        intercept_chunks: list[bytes] | None = None,
+        intercept_error: bool = False,
+        intercept_config: bool = True,
         local_decodes: bool = True,
         local_decode_error: bool = False,
         local_stall: float = 0,
@@ -106,11 +112,33 @@ class ManagerTransportTests(unittest.TestCase):
                         time.sleep(0.005)
                 yield from local_chunks or []
 
+        class FakeRtsps:
+            def __init__(self, _config) -> None:
+                calls.append("rtsps_init")
+
+            def stream(self, stop=None):
+                calls.append("rtsps_stream")
+                if rtsps_error:
+                    raise _MANAGER.LanP2PError("synthetic rtsps failure")
+                yield from rtsps_chunks or []
+
+        class FakeIntercept:
+            def __init__(self, _config) -> None:
+                calls.append("intercept_init")
+
+            def stream(self, stop=None):
+                calls.append("intercept_stream")
+                if intercept_error:
+                    raise _MANAGER.LanP2PError("synthetic intercept failure")
+                yield from intercept_chunks or []
+
         class FakeExtractor:
-            def __init__(self, frame_key: bytes) -> None:
+            def __init__(self, frame_key: bytes | None) -> None:
                 self.frame_key = frame_key
 
             def feed(self, chunk: bytes) -> list[bytes]:
+                if self.frame_key is None:
+                    return [chunk]
                 if self.frame_key == b"local-key" and local_decode_error:
                     raise RuntimeError("synthetic parser failure")
                 if self.frame_key == b"local-key" and not local_decodes:
@@ -119,7 +147,11 @@ class ManagerTransportTests(unittest.TestCase):
 
         originals = {
             "LanP2PTransport": _MANAGER.LanP2PTransport,
+            "RtspsTransport": _MANAGER.RtspsTransport,
+            "InterceptTransport": _MANAGER.InterceptTransport,
             "has_lan_config": _MANAGER.has_lan_config,
+            "has_rtsps_config": _MANAGER.has_rtsps_config,
+            "has_intercept_config": _MANAGER.has_intercept_config,
             "HevcExtractor": _MANAGER.HevcExtractor,
             "derive_frame_key": _MANAGER.derive_frame_key,
             "fetch_transfer_url": _MANAGER.fetch_transfer_url,
@@ -127,7 +159,11 @@ class ManagerTransportTests(unittest.TestCase):
             "Popen": _MANAGER.subprocess.Popen,
         }
         _MANAGER.LanP2PTransport = FakeLocal
+        _MANAGER.RtspsTransport = FakeRtsps
+        _MANAGER.InterceptTransport = FakeIntercept
         _MANAGER.has_lan_config = lambda _config: lan_config
+        _MANAGER.has_rtsps_config = lambda _config: rtsps_config
+        _MANAGER.has_intercept_config = lambda _config: intercept_config
         _MANAGER.HevcExtractor = FakeExtractor
         _MANAGER.derive_frame_key = lambda _config: b"cloud-key"
 
@@ -141,9 +177,7 @@ class ManagerTransportTests(unittest.TestCase):
 
         _MANAGER.fetch_transfer_url = fetch
         _MANAGER.tls_play_bytes = cloud_stream
-        _MANAGER.subprocess.Popen = lambda *_args, **_kwargs: _FakeProcess(
-            stop, writes
-        )
+        _MANAGER.subprocess.Popen = lambda *_args, **_kwargs: _FakeProcess(stop, writes)
         config = {
             "output": {
                 "transport_mode": mode,
@@ -162,7 +196,11 @@ class ManagerTransportTests(unittest.TestCase):
                 )
         finally:
             _MANAGER.LanP2PTransport = originals["LanP2PTransport"]
+            _MANAGER.RtspsTransport = originals["RtspsTransport"]
+            _MANAGER.InterceptTransport = originals["InterceptTransport"]
             _MANAGER.has_lan_config = originals["has_lan_config"]
+            _MANAGER.has_rtsps_config = originals["has_rtsps_config"]
+            _MANAGER.has_intercept_config = originals["has_intercept_config"]
             _MANAGER.HevcExtractor = originals["HevcExtractor"]
             _MANAGER.derive_frame_key = originals["derive_frame_key"]
             _MANAGER.fetch_transfer_url = originals["fetch_transfer_url"]
@@ -171,13 +209,73 @@ class ManagerTransportTests(unittest.TestCase):
         return calls, writes
 
     def test_local_only_never_calls_cloud(self) -> None:
-        calls, writes = self._run_worker("local_only", local_chunks=[b"local-frame"])
+        calls, writes = self._run_worker(
+            "local_only",
+            local_chunks=[b"local-frame"],
+            rtsps_config=False,
+            intercept_config=False,
+        )
 
         self.assertEqual(writes, [b"local-frame"])
         self.assertEqual(calls, ["local_init", "local_stream"])
 
+    def test_local_only_prefers_rtsps_without_cloud(self) -> None:
+        calls, writes = self._run_worker(
+            "local_only",
+            rtsps_chunks=[b"rtsps-frame"],
+            lan_config=False,
+            intercept_config=False,
+        )
+
+        self.assertEqual(writes, [b"rtsps-frame"])
+        self.assertEqual(calls, ["rtsps_init", "rtsps_stream"])
+
+    def test_local_only_prefers_intercept_without_cloud(self) -> None:
+        calls, writes = self._run_worker(
+            "local_only",
+            intercept_chunks=[b"intercept-frame"],
+            lan_config=False,
+            rtsps_config=False,
+        )
+
+        self.assertEqual(writes, [b"intercept-frame"])
+        self.assertEqual(calls, ["intercept_init", "intercept_stream"])
+
+    def test_local_first_falls_back_from_intercept_to_rtsps(self) -> None:
+        calls, writes = self._run_worker(
+            "local_first",
+            intercept_error=True,
+            rtsps_chunks=[b"rtsps-frame"],
+            lan_config=False,
+        )
+
+        self.assertEqual(writes, [b"rtsps-frame"])
+        self.assertEqual(
+            calls,
+            ["intercept_init", "intercept_stream", "rtsps_init", "rtsps_stream"],
+        )
+
+    def test_local_first_falls_back_from_rtsps_to_p2p(self) -> None:
+        calls, writes = self._run_worker(
+            "local_first",
+            rtsps_error=True,
+            local_chunks=[b"local-frame"],
+            intercept_config=False,
+        )
+
+        self.assertEqual(writes, [b"local-frame"])
+        self.assertEqual(
+            calls,
+            ["rtsps_init", "rtsps_stream", "local_init", "local_stream"],
+        )
+
     def test_local_first_falls_back_only_after_local_failure(self) -> None:
-        calls, writes = self._run_worker("local_first", local_error=True)
+        calls, writes = self._run_worker(
+            "local_first",
+            local_error=True,
+            rtsps_config=False,
+            intercept_config=False,
+        )
 
         self.assertEqual(writes, [b"cloud-frame"])
         self.assertEqual(
@@ -190,6 +288,8 @@ class ManagerTransportTests(unittest.TestCase):
             "local_first",
             local_chunks=[b"non-video-local-data"],
             local_decodes=False,
+            rtsps_config=False,
+            intercept_config=False,
         )
 
         self.assertEqual(writes, [b"cloud-frame"])
@@ -204,6 +304,8 @@ class ManagerTransportTests(unittest.TestCase):
             "local_first",
             local_stall=0.25,
             local_frame_timeout=0.02,
+            rtsps_config=False,
+            intercept_config=False,
         )
 
         self.assertLess(time.monotonic() - started, 0.15)
@@ -218,6 +320,8 @@ class ManagerTransportTests(unittest.TestCase):
             "local_first",
             local_chunks=[b"malformed-local-data"],
             local_decode_error=True,
+            rtsps_config=False,
+            intercept_config=False,
         )
 
         self.assertEqual(writes, [b"cloud-frame"])
@@ -227,20 +331,28 @@ class ManagerTransportTests(unittest.TestCase):
         )
 
     def test_local_first_legacy_config_uses_cloud(self) -> None:
-        calls, writes = self._run_worker("local_first", lan_config=False)
+        calls, writes = self._run_worker(
+            "local_first",
+            lan_config=False,
+            rtsps_config=False,
+            intercept_config=False,
+        )
 
         self.assertEqual(writes, [b"cloud-frame"])
         self.assertEqual(calls, ["cloud_fetch", "cloud_stream"])
 
     def test_cloud_only_does_not_construct_lan_transport(self) -> None:
-        calls, writes = self._run_worker("cloud_only")
+        calls, writes = self._run_worker(
+            "cloud_only",
+            intercept_config=False,
+        )
 
         self.assertEqual(writes, [b"cloud-frame"])
         self.assertEqual(calls, ["cloud_fetch", "cloud_stream"])
 
 
 class ManagerLifecycleTests(unittest.TestCase):
-    def test_stop_retains_output_and_reports_live_worker(self) -> None:
+    def test_stop_removes_output_and_reports_live_worker(self) -> None:
         class LiveThread:
             def is_alive(self) -> bool:
                 return True
@@ -256,7 +368,7 @@ class ManagerLifecycleTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "worker did not stop"):
             manager.stop()
 
-        self.assertTrue(output.exists())
+        self.assertFalse(output.exists())
         manager._worker_thread = None
         manager.stop()
         self.assertFalse(output.exists())

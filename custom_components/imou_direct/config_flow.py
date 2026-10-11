@@ -26,10 +26,12 @@ from .const import (
     CONF_COUNTRY,
     CONF_DEVICE_ID,
     CONF_FFMPEG_BIN,
+    CONF_INTERCEPT_HOST,
     CONF_TRANSPORT_MODE,
     CONF_WIDTH,
     DEFAULT_COUNTRY,
     DEFAULT_FFMPEG_BIN,
+    DEFAULT_INTERCEPT_HOST,
     DEFAULT_NAME,
     DEFAULT_TRANSPORT_MODE,
     DEFAULT_WIDTH,
@@ -130,6 +132,9 @@ class ImouDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_NAME: user_input[CONF_NAME],
                         CONF_COUNTRY: country,
                         CONF_TRANSPORT_MODE: user_input[CONF_TRANSPORT_MODE],
+                        CONF_INTERCEPT_HOST: user_input.get(
+                            CONF_INTERCEPT_HOST, DEFAULT_INTERCEPT_HOST
+                        ),
                         CONF_WIDTH: user_input[CONF_WIDTH],
                     }
                     self._devices = {
@@ -164,6 +169,9 @@ class ImouDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_WIDTH, default=DEFAULT_WIDTH): vol.All(
                     vol.Coerce(int), vol.Range(min=MIN_WIDTH, max=MAX_WIDTH)
                 ),
+                vol.Required(
+                    CONF_INTERCEPT_HOST, default=DEFAULT_INTERCEPT_HOST
+                ): selector.TextSelector(selector.TextSelectorConfig()),
             }
         )
         return self.async_show_form(
@@ -255,6 +263,9 @@ class ImouDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_NAME: user_input[CONF_NAME],
                         CONF_COUNTRY: country,
                         CONF_TRANSPORT_MODE: user_input[CONF_TRANSPORT_MODE],
+                        CONF_INTERCEPT_HOST: user_input.get(
+                            CONF_INTERCEPT_HOST, DEFAULT_INTERCEPT_HOST
+                        ),
                         CONF_WIDTH: user_input[CONF_WIDTH],
                         CONF_BOOTSTRAP: bootstrap,
                     }
@@ -298,6 +309,12 @@ class ImouDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ): vol.All(
                     vol.Coerce(int), vol.Range(min=MIN_WIDTH, max=MAX_WIDTH)
                 ),
+                vol.Required(
+                    CONF_INTERCEPT_HOST,
+                    default=entry.data.get(
+                        CONF_INTERCEPT_HOST, DEFAULT_INTERCEPT_HOST
+                    ),
+                ): selector.TextSelector(selector.TextSelectorConfig()),
             }
         )
         return self.async_show_form(

@@ -23,7 +23,15 @@ from .const import (
     TRANSPORT_MODES,
 )
 from .core import HevcExtractor, derive_frame_key, fetch_transfer_url, tls_play_bytes
-from .lan import LanP2PError, LanP2PTransport, has_lan_config
+from .lan import (
+    InterceptTransport,
+    LanP2PError,
+    LanP2PTransport,
+    RtspsTransport,
+    has_intercept_config,
+    has_lan_config,
+    has_rtsps_config,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -188,7 +196,7 @@ def _ffmpeg_command(
 
 
 def _local_stream_chunks(
-    transport: LanP2PTransport,
+    transport: InterceptTransport | LanP2PTransport | RtspsTransport,
     stop: threading.Event,
     timeout: float,
 ):
@@ -244,6 +252,17 @@ def _local_stream_chunks(
             raise RuntimeError("LAN transport did not stop")
 
 
+def _feed_local_or_cloud(
+    name: str, extractor: HevcExtractor, chunk: bytes
+) -> list[bytes]:
+    """Feed one wire chunk and map parser failures to LAN errors locally."""
+    try:
+        return extractor.feed(chunk)
+    except RuntimeError as error:
+        if name != "local":
+            raise
+        raise LanP2PError("LAN media parsing failed") from error
+
 def _stream_worker(
     config: dict,
     output: Path,
@@ -279,9 +298,13 @@ def _stream_worker(
             if process.stdin is None:
                 raise RuntimeError("ffmpeg input unavailable")
             candidates: list[str] = []
+            if transport_mode != TRANSPORT_CLOUD_ONLY and has_intercept_config(config):
+                candidates.append("intercept")
+            if transport_mode != TRANSPORT_CLOUD_ONLY and has_rtsps_config(config):
+                candidates.append("rtsps")
             if transport_mode != TRANSPORT_CLOUD_ONLY and has_lan_config(config):
                 candidates.append("local")
-            elif transport_mode == TRANSPORT_LOCAL_ONLY:
+            if not candidates and transport_mode == TRANSPORT_LOCAL_ONLY:
                 raise LanP2PError("LAN configuration is unavailable")
 
             if transport_mode != TRANSPORT_LOCAL_ONLY:
@@ -289,7 +312,19 @@ def _stream_worker(
 
             for index, name in enumerate(candidates):
                 try:
-                    if name == "local":
+                    if name == "intercept":
+                        intercept = InterceptTransport(config)
+                        chunks = _local_stream_chunks(
+                            intercept, stop, local_frame_timeout
+                        )
+                        frame_key = None
+                    elif name == "rtsps":
+                        rtsps = RtspsTransport(config)
+                        chunks = _local_stream_chunks(
+                            rtsps, stop, local_frame_timeout
+                        )
+                        frame_key = None
+                    elif name == "local":
                         local = LanP2PTransport(config)
                         chunks = _local_stream_chunks(
                             local, stop, local_frame_timeout
@@ -299,24 +334,25 @@ def _stream_worker(
                         transfer_url = fetch_transfer_url(config)
                         chunks = tls_play_bytes(config, transfer_url, stop=stop)
                         frame_key = derive_frame_key(config)
-                    extractor = HevcExtractor(frame_key)
+                    if stop.is_set():
+                        break
+                    extractor = None if frame_key is None else HevcExtractor(frame_key)
                     last_frame_at = time.monotonic()
                     for chunk in chunks:
                         if stop.is_set():
                             break
-                        try:
-                            frames = extractor.feed(chunk)
-                        except RuntimeError as error:
-                            if name != "local":
-                                raise
-                            raise LanP2PError("LAN media parsing failed") from error
+                        frames = (
+                            [chunk]
+                            if extractor is None
+                            else _feed_local_or_cloud(name, extractor, chunk)
+                        )
                         for hevc in frames:
                             process.stdin.write(hevc)
                             process.stdin.flush()
                             state.frame_received()
                             last_frame_at = time.monotonic()
                         if (
-                            name == "local"
+                            name in ("local", "rtsps", "intercept")
                             and not frames
                             and time.monotonic() - last_frame_at
                             >= local_frame_timeout
@@ -326,12 +362,12 @@ def _stream_worker(
                             raise RuntimeError("ffmpeg exited")
                     if stop.is_set():
                         break
-                    if name == "local":
+                    if name in ("local", "rtsps", "intercept"):
                         raise LanP2PError("LAN stream ended")
                     raise RuntimeError("transfer stream ended")
                 except LanP2PError:
                     has_fallback = index + 1 < len(candidates)
-                    if name != "local" or not has_fallback:
+                    if name not in ("local", "rtsps", "intercept") or not has_fallback:
                         raise
                     _LOGGER.info("Local Imou stream unavailable; using cloud fallback")
 
@@ -461,20 +497,22 @@ class DirectStreamManager:
         """Stop all runtime work and remove transient media files."""
         self._stop.set()
         self._state.terminate_process()
-        if self._server is not None:
+        try:
+            if self._server is not None:
+                if self._server_thread is not None and self._server_thread.is_alive():
+                    self._server.shutdown()
+                self._server.server_close()
             if self._server_thread is not None and self._server_thread.is_alive():
-                self._server.shutdown()
-            self._server.server_close()
-        if self._server_thread is not None and self._server_thread.is_alive():
-            self._server_thread.join(timeout=3)
-        if self._worker_thread is not None and self._worker_thread.is_alive():
-            self._worker_thread.join(timeout=7)
-        self._server = None
-        if self._worker_thread is not None and self._worker_thread.is_alive():
-            raise RuntimeError("stream worker did not stop")
-        self._server_thread = None
-        self._worker_thread = None
-        shutil.rmtree(self._output, ignore_errors=True)
+                self._server_thread.join(timeout=3)
+            if self._worker_thread is not None and self._worker_thread.is_alive():
+                self._worker_thread.join(timeout=7)
+            self._server = None
+            if self._worker_thread is not None and self._worker_thread.is_alive():
+                raise RuntimeError("stream worker did not stop")
+            self._server_thread = None
+            self._worker_thread = None
+        finally:
+            shutil.rmtree(self._output, ignore_errors=True)
 
     def health(self) -> dict[str, bool | float | int | None]:
         return self._state.public()

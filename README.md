@@ -4,14 +4,17 @@
   <img src="custom_components/imou_direct/brand/icon@2x.png" alt="Imou Direct icon" width="160">
 </p>
 
-Experimental HACS custom integration that exposes an Imou Doorbell 3 as a
-normal Home Assistant `camera` entity without Android at runtime.
+Experimental direct integrations for an Imou Doorbell 3 without Android at
+runtime. The Home Assistant HACS integration is the currently implemented
+runtime. A separate native Scrypted doorbell plugin is being developed as a
+first-class consumer of the recovered protocol; it is not a Home Assistant
+wrapper or relay and its live capability gates are still closed.
 
 The recovered stream path:
 
 - provides an interactive Home Assistant login and device picker;
-- opens the camera's authenticated LAN channel over the recovered PTCP/DHHTTP
-  transport, without captured request data;
+- opens the camera's credential-authenticated LAN channel over the recovered
+  PTCP/DHHTTP transport, without captured request data;
 - can fall back to a signed Imou media transfer when the local path is
   unavailable;
 - constructs a fresh proprietary TLS/WSSE `PLAY` handshake for either path;
@@ -53,12 +56,15 @@ happen locally.
 
 The setup form offers three transport modes:
 
-- **Local first, with cloud fallback** (default) tries the LAN transport and
-  requests a temporary Imou transfer only if the local connection fails.
+- **Local first, with cloud fallback** (default) tries the local transports in
+  order — intercept daemon, LAN RTSPS, legacy P2P — and requests a temporary
+  Imou transfer only if the local connection fails.
 - **Local only** never calls the Imou media-transfer service at runtime. It is
   designed to keep working without WAN access after a successful setup, provided
-  Home Assistant and the camera remain on the same LAN. The final WAN-blocked
-  end-to-end independence test is still pending.
+  Home Assistant and the camera remain on the same LAN. The intercept path
+  delivers live footage tapped from the Chime's own upload stream; the RTSPS
+  path serves the Chime's cached event clip; the legacy P2P path remains a
+  fallback candidate.
 - **Cloud only** retains the version 0.2 runtime behavior.
 
 Existing version 0.2 entries do not yet contain the additional LAN credentials.
@@ -68,6 +74,20 @@ default mode safely uses its cloud fallback.
 For the complete recovered sequence—from XAPK/JADX and native/runtime analysis
 through PCS bootstrap, LAN PTCP/DHHTTP, `PLAY`, RTP/DHAV decryption, FFmpeg, and
 Home Assistant delivery—see [Technical stream flow](docs/TECHNICAL_FLOW.md).
+
+## Scrypted target
+
+The Scrypted target lives under `scrypted/plugins/imou-direct`. Its current
+code is an offline-tested, fail-closed architecture baseline rather than a
+working camera plugin. It advertises only `Settings` and `Online`; it will add
+`VideoCamera`, `BinarySensor`, and `Intercom` only as their independent live
+evidence gates pass.
+
+Completion means a real Scrypted `Doorbell` with local live video, snapshots,
+inbound audio, one debounced event for each physical button press, bounded
+two-way audio, reconnect/restart recovery, and accurate online state. It must
+connect to the shared protocol implementation directly and must not depend on
+Home Assistant at runtime. See the [Scrypted plugin status](scrypted/plugins/imou-direct/README.md).
 
 ## Install with HACS
 
@@ -89,16 +109,27 @@ an `ffmpeg` executable on Home Assistant's `PATH`.
 ## Security and runtime behavior
 
 - The generated HLS service binds only to `127.0.0.1` inside Home Assistant.
+- PCS API hosts are restricted to approved Imou HTTPS origins and redirects are
+  rejected before session-authenticated requests are sent.
 - The Imou account identifier and password are never retained after setup.
 - Session and device credentials remain in Home Assistant's local config-entry
   storage and never appear in diagnostics or entity attributes.
 - Browser clients use Home Assistant's authenticated camera proxy.
 - Diagnostics contain only connection state, frame age, and reconnect count.
 - Temporary HLS segments and snapshots are deleted when the integration unloads.
+- Proprietary `PLAY` headers and SDP bodies have explicit memory limits and an
+  absolute response deadline.
 - No Android process, Supervisor add-on, open add-on port, Generic Camera entry,
   RTSP server, or ONVIF profile is required at runtime.
 - In **Local only** mode, opening and reconnecting the stream performs no Imou
   cloud media request.
+
+The proprietary LAN and media endpoints do not currently provide a verified
+public-PKI identity or another proven server-authentication mechanism. Local
+mode therefore assumes a trusted camera network. Its broadcast authentication
+transcript can also be used to test weak device-media passwords offline; the
+current tested devices use vendor-provisioned credentials, whose entropy is not
+established by this repository.
 
 ## Compatibility
 

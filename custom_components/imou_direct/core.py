@@ -10,11 +10,59 @@ import secrets
 import socket
 import ssl
 import string
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+MAX_PLAY_HEADER = 64 * 1024
+MAX_PLAY_BODY = 1024 * 1024
+_ALLOWED_API_HOST_SUFFIXES = ("easy4ipcloud.com",)
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject redirects for signed transfer requests."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def _urlopen_no_redirect(request, *, timeout: int):
+    return urllib.request.build_opener(_NoRedirectHandler).open(
+        request, timeout=timeout
+    )
+
+
+def _normalise_api_host(value: str) -> str:
+    """Validate persisted API origins, including legacy bootstraps."""
+    host = value.strip()
+    if "://" not in host:
+        host = "https://" + host
+    parsed = urllib.parse.urlsplit(host)
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise RuntimeError("invalid transfer API host") from error
+    hostname = (parsed.hostname or "").rstrip(".").lower()
+    approved = any(
+        hostname == suffix or hostname.endswith("." + suffix)
+        for suffix in _ALLOWED_API_HOST_SUFFIXES
+    )
+    if (
+        parsed.scheme.lower() != "https"
+        or not approved
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in (None, 443)
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RuntimeError("invalid transfer API host")
+    netloc = hostname if port is None else f"{hostname}:{port}"
+    return urllib.parse.urlunsplit(("https", netloc, "", "", ""))
 
 
 def _digest(body: bytes, algorithm: str) -> str:
@@ -111,10 +159,14 @@ def fetch_transfer_url(config: dict, timeout: int = 20) -> str:
     if rest.get("region"):
         headers["x_pcs_region"] = rest["region"]
 
-    endpoint = urllib.parse.urljoin(rest["host"].rstrip("/") + "/", rest["uri"])
+    uri = str(rest["uri"])
+    parsed_uri = urllib.parse.urlsplit(uri)
+    if not uri.startswith("/") or parsed_uri.scheme or parsed_uri.netloc:
+        raise RuntimeError("invalid transfer API path")
+    endpoint = _normalise_api_host(rest["host"]) + uri
     request = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _urlopen_no_redirect(request, timeout=timeout) as response:
             status = response.status
             response_body = response.read()
     except urllib.error.HTTPError as error:
@@ -297,8 +349,51 @@ def _header(request: bytes, name: bytes) -> bytes:
 def _play_response_length(header: bytes) -> int:
     for line in header.split(b"\r\n"):
         if line.lower().startswith((b"content-length:", b"private-length:")):
-            return int(line.split(b":", 1)[1])
+            try:
+                length = int(line.split(b":", 1)[1])
+            except ValueError as error:
+                raise RuntimeError("invalid PLAY SDP length") from error
+            if not 0 <= length <= MAX_PLAY_BODY:
+                raise RuntimeError("invalid PLAY SDP length")
+            return length
     raise RuntimeError("PLAY SDP length missing")
+
+
+def _read_play_response(tls, *, timeout: float, stop=None) -> bytes:
+    """Read one bounded PLAY response and return bytes after its SDP body."""
+    deadline = time.monotonic() + timeout
+
+    def receive() -> bytes:
+        if stop is not None and stop.is_set():
+            raise RuntimeError("PLAY response stopped")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError("PLAY response timed out")
+        if hasattr(tls, "settimeout"):
+            tls.settimeout(min(remaining, 1.0))
+        chunk = tls.recv(65536)
+        if not chunk:
+            raise RuntimeError("PLAY response ended unexpectedly")
+        return chunk
+
+    pending = bytearray()
+    while b"\r\n\r\n" not in pending:
+        pending.extend(receive())
+        marker = pending.find(b"\r\n\r\n")
+        if marker < 0 and len(pending) > MAX_PLAY_HEADER:
+            raise RuntimeError("PLAY response header is too large")
+        if marker > MAX_PLAY_HEADER:
+            raise RuntimeError("PLAY response header is too large")
+
+    header, _separator, initial = bytes(pending).partition(b"\r\n\r\n")
+    status_line = header.split(b"\r\n", 1)[0]
+    if b" 200 " not in status_line:
+        raise RuntimeError("PLAY response was not HTTP 200")
+    content_length = _play_response_length(header)
+    remainder = bytearray(initial)
+    while len(remainder) < content_length:
+        remainder.extend(receive())
+    return bytes(remainder[content_length:])
 
 
 def tls_play_bytes(
@@ -315,23 +410,7 @@ def tls_play_bytes(
     ) as tls:
             tls.settimeout(timeout)
             tls.sendall(request)
-            pending = bytearray()
-            while b"\r\n\r\n" not in pending:
-                chunk = tls.recv(65536)
-                if not chunk:
-                    raise RuntimeError("PLAY response ended before headers")
-                pending.extend(chunk)
-            header, _separator, remainder = bytes(pending).partition(b"\r\n\r\n")
-            status_line = header.split(b"\r\n", 1)[0]
-            if b" 200 " not in status_line:
-                raise RuntimeError("PLAY response was not HTTP 200")
-            content_length = _play_response_length(header)
-            while len(remainder) < content_length:
-                chunk = tls.recv(65536)
-                if not chunk:
-                    raise RuntimeError("PLAY response ended during SDP")
-                remainder += chunk
-            yield remainder[content_length:]
+            yield _read_play_response(tls, timeout=timeout, stop=stop)
             tls.settimeout(2)
             while True:
                 try:

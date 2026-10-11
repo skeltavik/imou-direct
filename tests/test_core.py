@@ -6,6 +6,7 @@ import base64
 import hashlib
 import importlib.util
 import re
+import threading
 import unittest
 from pathlib import Path
 
@@ -17,6 +18,19 @@ _SPEC.loader.exec_module(_CORE)
 
 
 class CoreTests(unittest.TestCase):
+    def test_runtime_api_host_rejects_legacy_unsafe_destinations(self) -> None:
+        self.assertEqual(
+            _CORE._normalise_api_host("https://entry.easy4ipcloud.com:443"),
+            "https://entry.easy4ipcloud.com:443",
+        )
+        for value in (
+            "http://entry.easy4ipcloud.com",
+            "https://attacker.example",
+            "https://169.254.169.254",
+        ):
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                _CORE._normalise_api_host(value)
+
     def test_extractor_accepts_local_four_byte_interleaved_lengths(self) -> None:
         payload = b"\x00\x00\x00\x01\x40\x01synthetic-hevc"
         frame_length = 24 + len(payload) + 8
@@ -107,6 +121,60 @@ class CoreTests(unittest.TestCase):
             _CORE._play_response_length(b"HTTP/1.1 200 OK\r\nContent-Length: 644"),
             644,
         )
+
+    def test_play_response_rejects_invalid_or_oversized_lengths(self) -> None:
+        for value in (b"-1", b"invalid", str(_CORE.MAX_PLAY_BODY + 1).encode()):
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                _CORE._play_response_length(
+                    b"HTTP/1.1 200 OK\r\nPrivate-Length: " + value
+                )
+
+    def test_play_response_rejects_oversized_header(self) -> None:
+        class FakeTls:
+            def recv(self, _size: int) -> bytes:
+                return b"X" * (_CORE.MAX_PLAY_HEADER + 1)
+
+        with self.assertRaisesRegex(RuntimeError, "header is too large"):
+            _CORE._read_play_response(FakeTls(), timeout=10, stop=None)
+
+    def test_play_response_preserves_media_after_bounded_sdp(self) -> None:
+        class FakeTls:
+            def __init__(self) -> None:
+                self.chunks = [
+                    b"HTTP/1.1 200 OK\r\nPrivate-Length: 4\r\n\r\nSDP!media"
+                ]
+
+            def recv(self, _size: int) -> bytes:
+                return self.chunks.pop(0)
+
+        self.assertEqual(
+            _CORE._read_play_response(FakeTls(), timeout=10, stop=None), b"media"
+        )
+
+    def test_play_response_honours_stop_before_receiving(self) -> None:
+        stop = threading.Event()
+        stop.set()
+
+        class FakeTls:
+            def recv(self, _size: int) -> bytes:
+                raise AssertionError("recv must not run after stop")
+
+        with self.assertRaisesRegex(RuntimeError, "stopped"):
+            _CORE._read_play_response(FakeTls(), timeout=10, stop=stop)
+
+    def test_play_response_enforces_absolute_deadline(self) -> None:
+        class FakeTls:
+            def recv(self, _size: int) -> bytes:
+                raise AssertionError("recv must not run after the deadline")
+
+        original = _CORE.time.monotonic
+        moments = iter((100.0, 111.0))
+        _CORE.time.monotonic = lambda: next(moments)
+        try:
+            with self.assertRaisesRegex(RuntimeError, "timed out"):
+                _CORE._read_play_response(FakeTls(), timeout=10, stop=None)
+        finally:
+            _CORE.time.monotonic = original
 
     def test_generic_play_request_has_fresh_valid_digests(self) -> None:
         transfer_url = "stream.example:443/live.rtpxav?token=abc"

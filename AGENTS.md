@@ -43,6 +43,16 @@ These files are intended for GitHub and releases:
 - `README.md`, `LICENSE`, `hacs.json`, `renovate.json`, and `.gitignore`.
 - This `AGENTS.md`.
 
+### Public, tracked add-on prototype
+
+`imou_direct_addon/` holds the `imou-intercept` Supervisor add-on prototype
+(`config.yaml`, `Dockerfile`, s6 service entrypoint, bundled daemon plus
+core fallback, operator README). It is tracked and must stay free of
+device identifiers, addresses beyond documented RFC 1918 defaults,
+credentials, captures, and decrypted media. The operator supplies
+`chime_ip`, `upload_port`, and the secret `frame_key_hex` at install time;
+defaults must never contain real device values.
+
 ### Local, intentionally ignored research workspace
 
 The following paths can contain proprietary binaries, decompiled sources,
@@ -52,7 +62,7 @@ or one-off instrumentation:
 - `analysis/`, `artifacts/`, `evidence/`, `runtime/`, `tmp/`, and `vendor/`.
 - `tools/` and top-level `*_probe.py` / `test_imou*.py` scripts.
 - `FINDINGS.md` and `REVERSE_ENGINEERING.md`.
-- Top-level `imou_direct/` and `imou_direct_addon/` research implementations.
+- Top-level `imou_direct/` research implementation.
 - `*.private.json` and `imou_direct.json`.
 
 Use these local sources as evidence when appropriate, but do not stage them,
@@ -89,7 +99,9 @@ Module responsibilities:
 - `core.py`: media transfer signing, PLAY construction, TLS transport, RTP and
   DHAV parsing, key derivation, and HEVC extraction.
 - `manager.py`: reconnect loop, FFmpeg lifecycle, temporary files, loopback HLS
-  server, health state, and cleanup.
+  server, health state, and cleanup. Local candidate order is intercept,
+  RTSPS, legacy P2P, then cloud fallback; every LAN candidate maps its
+  failure to `LanP2PError` so fallback stays fail-closed.
 - `camera.py`: Home Assistant entity surface only; it must not expose private
   configuration.
 - `__init__.py`: config-entry setup/unload and platform forwarding.

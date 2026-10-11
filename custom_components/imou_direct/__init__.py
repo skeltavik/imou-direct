@@ -10,9 +10,11 @@ from .const import (
     CONF_BOOTSTRAP,
     CONF_CONFIG_PATH,
     CONF_FFMPEG_BIN,
+    CONF_INTERCEPT_HOST,
     CONF_TRANSPORT_MODE,
     CONF_WIDTH,
     DEFAULT_FFMPEG_BIN,
+    DEFAULT_INTERCEPT_HOST,
     DEFAULT_TRANSPORT_MODE,
     PLATFORMS,
 )
@@ -36,6 +38,10 @@ async def async_setup_entry(
         config.setdefault("output", {})["width"] = entry.data[CONF_WIDTH]
         config["output"]["transport_mode"] = entry.data.get(
             CONF_TRANSPORT_MODE, DEFAULT_TRANSPORT_MODE
+        )
+        lan = config.setdefault("lan", {})
+        lan["intercept_host"] = entry.data.get(
+            CONF_INTERCEPT_HOST, DEFAULT_INTERCEPT_HOST
         )
         manager = DirectStreamManager(
             config, entry.data.get(CONF_FFMPEG_BIN, DEFAULT_FFMPEG_BIN)

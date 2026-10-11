@@ -74,6 +74,20 @@ class ImouDevice:
 
 
 UrlOpen = Callable[..., Any]
+_ALLOWED_API_HOST_SUFFIXES = ("easy4ipcloud.com",)
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject redirects for credential-bearing PCS requests."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def _urlopen_no_redirect(request, *, timeout: int):
+    return urllib.request.build_opener(_NoRedirectHandler).open(
+        request, timeout=timeout
+    )
 
 
 def new_terminal_id() -> str:
@@ -115,16 +129,36 @@ def build_client_ua(
     return base64.b64encode(encoded).decode()
 
 
-def _normalise_host(value: str) -> str:
+def normalise_api_host(value: str) -> str:
+    """Return a canonical, approved Imou HTTPS API origin."""
     host = value.strip()
     if not host:
         raise ImouProtocolError("Imou returned an empty API host")
     if "://" not in host:
         host = "https://" + host
     parsed = urllib.parse.urlsplit(host)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise ImouProtocolError("Imou returned an invalid API host") from error
+    hostname = (parsed.hostname or "").rstrip(".").lower()
+    approved = any(
+        hostname == suffix or hostname.endswith("." + suffix)
+        for suffix in _ALLOWED_API_HOST_SUFFIXES
+    )
+    if (
+        parsed.scheme.lower() != "https"
+        or not approved
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in (None, 443)
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+    ):
         raise ImouProtocolError("Imou returned an invalid API host")
-    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
+    netloc = hostname if port is None else f"{hostname}:{port}"
+    return urllib.parse.urlunsplit(("https", netloc, "", "", ""))
 
 
 def _digest(body: bytes, algorithm: str) -> str:
@@ -183,7 +217,7 @@ class ImouCloudClient:
         language: str = "nl_BE",
         timezone_offset: int | None = None,
         timeout: int = 15,
-        urlopen: UrlOpen = urllib.request.urlopen,
+        urlopen: UrlOpen = _urlopen_no_redirect,
     ) -> None:
         self.terminal_id = terminal_id or new_terminal_id()
         self.country = country.upper()
@@ -249,7 +283,7 @@ class ImouCloudClient:
         if session_id:
             headers["x-pcs-session-id"] = session_id
 
-        endpoint = _normalise_host(host) + uri
+        endpoint = normalise_api_host(host) + uri
         request = urllib.request.Request(
             endpoint, data=body, headers=headers, method="POST"
         )
@@ -325,7 +359,7 @@ class ImouCloudClient:
             token_username = "token/" + str(token_data["username"])
             token = str(token_data["token"])
             session_id = str(token_data["sessionId"])
-            host = _normalise_host(str(token_data["entryUrlV2"]))
+            host = normalise_api_host(str(token_data["entryUrlV2"]))
             user_id = int(token_data["userId"])
         except (KeyError, TypeError) as error:
             raise ImouProtocolError("Imou token response is incomplete") from error
@@ -345,7 +379,7 @@ class ImouCloudClient:
             session_id=session_id,
         )
         if login_data.get("entryUrlV2"):
-            host = _normalise_host(str(login_data["entryUrlV2"]))
+            host = normalise_api_host(str(login_data["entryUrlV2"]))
         return ImouSession(
             host=host,
             username=token_username,
