@@ -25,7 +25,7 @@ _ALLOWED_API_HOST_SUFFIXES = ("easy4ipcloud.com",)
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Reject redirects for signed transfer requests."""
 
-    def redirect_request(self, *args, **kwargs):  # noqa: ANN002, ANN003
+    def redirect_request(self, *args, **kwargs):
         return None
 
 

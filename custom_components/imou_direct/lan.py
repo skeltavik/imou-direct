@@ -238,7 +238,7 @@ def rtsp_authorization(
     realm, nonce = fields.get("realm"), fields.get("nonce")
     if not realm or not nonce:
         return None
-    md5 = lambda value: hashlib.md5(value.encode("utf-8")).hexdigest()  # noqa: E731
+    md5 = lambda value: hashlib.md5(value.encode("utf-8")).hexdigest()
     cnonce = secrets.token_hex(8)
     ha1 = md5(f"{username}:{realm}:{password}")
     ha2 = md5(f"{method}:{uri}")
@@ -415,7 +415,7 @@ class RtspsTransport:
         while stop is None or not stop.is_set():
             try:
                 chunk = tls.recv(MAX_DATAGRAM)
-            except socket.timeout as error:
+            except TimeoutError as error:
                 raise LanP2PError("LAN stream timed out") from error
             if not chunk:
                 raise LanP2PError("LAN stream ended")
@@ -944,7 +944,7 @@ class InterceptTransport:
             while stop is None or not stop.is_set():
                 try:
                     chunk = sock.recv(MAX_DATAGRAM)
-                except socket.timeout as error:
+                except TimeoutError as error:
                     raise LanP2PError("LAN stream timed out") from error
                 if not chunk:
                     if pending:
