@@ -1,4 +1,4 @@
-ARG BUILD_FROM=ghcr.io/hassio-addons/base-python:3.13.1
+ARG BUILD_FROM=ghcr.io/hassio-addons/base-python:19.1.0
 FROM ${BUILD_FROM}
 
 RUN apk add --no-cache tshark
