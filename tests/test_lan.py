@@ -7,13 +7,13 @@ import datetime as dt
 import hashlib
 import hmac
 import importlib.util
-from pathlib import Path
 import re
 import sys
 import types
 import unittest
 import urllib.parse
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 _COMPONENT = Path(__file__).parents[1] / "custom_components" / "imou_direct"
 _PACKAGE = types.ModuleType("imou_direct_lan_test")
@@ -58,7 +58,7 @@ def _config() -> dict:
 class LanTests(unittest.TestCase):
     def test_local_channel_request_has_fresh_valid_authentication(self) -> None:
         lan = _config()
-        moment = dt.datetime(2026, 7, 20, 12, 34, 56, tzinfo=dt.timezone.utc)
+        moment = dt.datetime(2026, 7, 20, 12, 34, 56, tzinfo=dt.UTC)
         request = _LAN.build_local_channel_request(
             lan,
             now=moment,

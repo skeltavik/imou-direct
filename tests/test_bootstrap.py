@@ -6,10 +6,10 @@ import base64
 import hashlib
 import importlib.util
 import json
-from pathlib import Path
 import sys
 import types
 import unittest
+from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 

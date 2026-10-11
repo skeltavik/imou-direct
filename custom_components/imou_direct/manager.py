@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from http import HTTPStatus
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+import copy
 import json
 import logging
-import copy
-from pathlib import Path
 import queue
 import shutil
 import subprocess
@@ -15,8 +12,10 @@ import tempfile
 import threading
 import time
 import urllib.parse
+from http import HTTPStatus
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
-from .core import HevcExtractor, derive_frame_key, fetch_transfer_url, tls_play_bytes
 from .const import (
     DEFAULT_TRANSPORT_MODE,
     TRANSPORT_CLOUD_ONLY,
@@ -24,6 +23,7 @@ from .const import (
     TRANSPORT_MODES,
 )
 from .lan import InterceptTransport, LanP2PError, LanP2PTransport, RtspsTransport, has_intercept_config, has_lan_config, has_rtsps_config
+from .core import HevcExtractor, derive_frame_key, fetch_transfer_url, tls_play_bytes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ _LOGGER = logging.getLogger(__name__)
 def validate_bootstrap(config: dict) -> dict:
     """Validate and copy a private stream bootstrap."""
     if not isinstance(config, dict):
-        raise ValueError("bootstrap root is not an object")
+        raise TypeError("bootstrap root is not an object")
 
     required = {
         "rest": (
@@ -53,11 +53,11 @@ def validate_bootstrap(config: dict) -> dict:
     for section, keys in required.items():
         values = config.get(section)
         if not isinstance(values, dict):
-            raise ValueError(f"missing {section} section")
+            raise TypeError(f"missing {section} section")
         if any(not isinstance(values.get(key), str) or not values[key] for key in keys):
             raise ValueError(f"missing field in {section} section")
     if not isinstance(config.get("request"), dict):
-        raise ValueError("missing request section")
+        raise TypeError("missing request section")
     template = config["stream"].get("play_template_hex")
     if template is not None and (not isinstance(template, str) or not template):
         raise ValueError("invalid PLAY template")
@@ -400,7 +400,7 @@ def _handler_factory(directory: Path, state: StreamState):
             self.send_header("Cache-Control", "no-store")
             super().end_headers()
 
-        def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
+        def do_GET(self) -> None:
             path = urllib.parse.urlsplit(self.path).path
             if path == "/health":
                 payload = json.dumps(state.public(), separators=(",", ":")).encode()

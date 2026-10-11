@@ -74,7 +74,7 @@ def _digest(body: bytes, algorithm: str) -> str:
 
 def _new_nonce() -> str:
     alphabet = string.ascii_letters + string.digits
-    return str(int(dt.datetime.now().timestamp() * 1000)) + "".join(
+    return str(int(dt.datetime.now(dt.UTC).timestamp() * 1000)) + "".join(
         secrets.choice(alphabet) for _ in range(32)
     )
 
@@ -127,7 +127,7 @@ def fetch_transfer_url(config: dict, timeout: int = 20) -> str:
     body = json.dumps(
         {"data": config["request"]}, separators=(",", ":"), ensure_ascii=False
     ).encode()
-    date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    date = dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     nonce = _new_nonce()
     signing = {
         **rest,
@@ -213,7 +213,7 @@ def build_play_request(config: dict, transfer_url: str) -> bytes:
             lines[index] = f"x-pcs-request-id: {secrets.token_hex(8)}"
 
     nonce = secrets.token_hex(16)
-    created = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    created = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ")
     digest = base64.b64encode(
         hmac.new(
             bytes.fromhex(stream["transfer_hmac_key_hex"]),
@@ -256,7 +256,7 @@ def _build_generic_play_request(stream: dict, transfer_url: str) -> bytes:
     )
 
     nonce = secrets.token_hex(16)
-    created = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    created = dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     effective_key = stream.get("wsse_key") or stream["device_sn"]
     credential_material = (
         stream["username"]
@@ -405,8 +405,9 @@ def tls_play_bytes(
     context = ssl.create_default_context()
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
-    with socket.create_connection((host, int(port_text)), timeout=timeout) as raw:
-        with context.wrap_socket(raw, server_hostname=host) as tls:
+    with socket.create_connection((host, int(port_text)), timeout=timeout) as raw, context.wrap_socket(
+        raw, server_hostname=host
+    ) as tls:
             tls.settimeout(timeout)
             tls.sendall(request)
             yield _read_play_response(tls, timeout=timeout, stop=stop)
@@ -414,7 +415,7 @@ def tls_play_bytes(
             while True:
                 try:
                     chunk = tls.recv(65536)
-                except socket.timeout:
+                except TimeoutError:
                     if stop is not None and stop.is_set():
                         return
                     continue

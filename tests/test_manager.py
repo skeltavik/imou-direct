@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 import sys
 import tempfile
 import threading
 import time
 import types
 import unittest
+from pathlib import Path
 
 _COMPONENT = Path(__file__).parents[1] / "custom_components" / "imou_direct"
 _PACKAGE = types.ModuleType("imou_direct_manager_test")
