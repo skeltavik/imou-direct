@@ -238,7 +238,9 @@ def rtsp_authorization(
     realm, nonce = fields.get("realm"), fields.get("nonce")
     if not realm or not nonce:
         return None
-    md5 = lambda value: hashlib.md5(value.encode("utf-8")).hexdigest()
+    def md5(value: str) -> str:
+        return hashlib.md5(value.encode("utf-8"), usedforsecurity=False).hexdigest()
+
     cnonce = secrets.token_hex(8)
     ha1 = md5(f"{username}:{realm}:{password}")
     ha2 = md5(f"{method}:{uri}")

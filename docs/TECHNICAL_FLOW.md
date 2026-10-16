@@ -442,6 +442,50 @@ override and the historical success do not justify production LAN behavior.
 Fresh non-empty local bytes and decoded frames remain mandatory before either
 Home Assistant or Scrypted enables the corresponding interface.
 
+### Local SDK control and event research (2026-10-16)
+
+A corrected official-SDK experiment established a working P2P control proxy to
+an authorized DS3 Chime. A fresh authenticated SDK session read the Chime's
+identity and service configuration. This demonstrates control connectivity;
+it does not establish live Doorbell media, ring delivery, or a protocol for
+TCP port 32768. That port's service and handshake remain unclassified.
+
+A separate research client can authenticate directly to the Chime's local
+control service and create an event subscription. The verified request sequence
+is `eventManager.factory.instance`, then `eventManager.attach` with the returned
+object, matching `params.proc`, and `params.codes: ["All"]`. It uses fresh
+session material and acknowledged keepalives. Cleanup sends
+`eventManager.detach` with `params.codes: "All"`, then closes the socket.
+Generic `eventManager.destroy` and JSON logout calls are excluded from this
+subscription cleanup after earlier research associated that sequence with a
+temporary device outage; the individual triggering call was not isolated.
+
+A bounded 15-minute observation received 90 keepalive acknowledgments and no
+event notifications. Following one intentional client-socket closure, a fresh
+session reattached in about two seconds. This verifies bounded session recovery,
+not recovery from a device reboot or delivery of a physical ring. No physical
+button press was included in that observation.
+
+The paired Doorbell's event forwarding remains unresolved:
+
+- No source-backed child-device selector was found for this local attach.
+  The Chime's channel index alone does not establish the physical event source.
+- Event index and mask getters also accept an unknown event name, so their
+  success cannot establish support for a named bell event.
+- The SDK's channel-subscription capability belongs to mobile push. Its
+  `ProfileAlarmTransmit` parser containing a source serial belongs to a separate
+  server/upload route; that format is not established for local notifications.
+- The matching SDK's legacy `StartListen` entry points return unsupported
+  locally. Their failure does not demonstrate a device-side event rejection.
+- No firmware image matched to this DS3 hardware/version has been obtained.
+  Older generic IPC firmware is comparative evidence only.
+
+For a future physical-ring test, the broad local subscription remains the
+candidate while the actual notification name, payload and source mapping are
+observed. Home Assistant and Scrypted event capabilities remain disabled.
+Research credentials, device identifiers, packet captures and decrypted media
+remain outside the public repository.
+
 ## Phase D: cloud transfer transport
 
 The cloud candidate uses the same token-backed bootstrap but makes a signed
